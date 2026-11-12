@@ -645,7 +645,7 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
       if (!sync.on) return `<div class="list-row"><span class="grow"><b>Sincronizzazione con Google Drive</b><small>${googleClientId() ? 'Accedi con Google per avere sezioni, app e dati uguali su tutti i dispositivi (cartella SuiteData).' : 'Prima va inserito l\'ID client Google (vedi guida).'}</small></span>
         ${googleClientId() ? '<button class="btn sm primary" data-act="web-enable">Accedi e attiva</button>' : ''}<button class="btn sm" data-act="web-client">ID client…</button></div>`;
       const st = sync.engine ? sync.engine.state() : { conflicts: [] };
-      const conf = (st.conflicts || []).slice(0, 5).map((c) => `<small>${esc(new Date(c.at).toLocaleString('it-IT'))} · ${esc(c.path)} · ${esc(c.why)}</small>`).join('<br>');
+      const conf = (st.conflicts || []).filter((c) => c.at > (st.seenAt || 0)).slice(0, 5).map((c) => `<small>${esc(new Date(c.at).toLocaleString('it-IT'))} · ${esc(c.path)} · ${esc(c.why)}</small>`).join('<br>');
       return `<div class="list-row"><span class="grow"><b>Sincronizzazione</b><small>${esc(sync.folder)}</small><small>Dispositivo: ${esc(deviceId())}</small></span>
           <span class="pill" id="sync-pill">${esc(syncLabel())}</span>${sync.status === 'login' ? '<button class="btn sm primary" data-act="web-signin">Accedi</button>' : ''}<button class="btn sm" data-act="sync-now">Sincronizza ora</button></div>
         <div class="list-row"><span class="grow"><b>Google Drive</b><small>Disattiva la sincronizzazione (i dati locali restano)</small></span><button class="btn sm danger" data-act="web-disable">Disattiva</button></div>
@@ -655,7 +655,7 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
     if (!sync.on) return `<div class="list-row"><span class="grow"><b>Sincronizzazione</b><small>Scegli la cartella SuiteData in Google Drive: sezioni, app e dati saranno gli stessi su tutti i tuoi dispositivi.</small></span>
       <button class="btn sm primary" data-act="sync-choose">Scegli cartella…</button></div>`;
     const st = sync.engine ? sync.engine.state() : { conflicts: [] };
-    const conf = (st.conflicts || []).slice(0, 5).map((c) => `<small>${esc(new Date(c.at).toLocaleString('it-IT'))} · ${esc(c.path)} · ${esc(c.why)}</small>`).join('<br>');
+    const conf = (st.conflicts || []).filter((c) => c.at > (st.seenAt || 0)).slice(0, 5).map((c) => `<small>${esc(new Date(c.at).toLocaleString('it-IT'))} · ${esc(c.path)} · ${esc(c.why)}</small>`).join('<br>');
     return `<div class="list-row"><span class="grow"><b>Sincronizzazione</b><small>${esc(sync.folder)}</small><small>Dispositivo: ${esc(deviceId())}</small></span>
         <span class="pill" id="sync-pill">${esc(syncLabel())}</span><button class="btn sm" data-act="sync-now">Sincronizza ora</button></div>
       <div class="list-row"><span class="grow"><b>Cartella</b><small>Cambia o scollega la cartella (i dati locali restano)</small></span>
