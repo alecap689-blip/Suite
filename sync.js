@@ -131,7 +131,7 @@
         }
         const remoteWins = env.updatedAt > m.updatedAt || (env.updatedAt === m.updatedAt && String(env.updatedBy) > String(m.updatedBy));
         if (remoteWins) {
-          await conflictCopy(f.path, { id: f.path, rev: m.rev, updatedAt: m.updatedAt, updatedBy: m.updatedBy, deleted: !!m.deleted, value: m.deleted ? null : lastLocal.get(f.path) }, 'locale-sostituita');
+          if (m.updatedAt !== 0) await conflictCopy(f.path, { id: f.path, rev: m.rev, updatedAt: m.updatedAt, updatedBy: m.updatedBy, deleted: !!m.deleted, value: m.deleted ? null : lastLocal.get(f.path) }, 'locale-sostituita'); // updatedAt 0 = dato locale appena adottato al primo collegamento: nessun conflitto vero
           takeRemote();
         } else {
           await conflictCopy(f.path, env, 'remota-sostituita');
@@ -175,7 +175,7 @@
         await push();
         if (!st.connectedAt) st.connectedAt = now();
         save();
-        onStatus(st.conflicts.length ? 'conflict' : 'ok', { changed: changes.length });
+        onStatus(st.conflicts.some((c) => c.at > (st.seenAt || 0)) ? 'conflict' : 'ok', { changed: changes.length });
         return { changed: changes.length };
       } catch (e) {
         save(); onStatus('error', e); throw e;
@@ -183,7 +183,7 @@
     }
     const sync = () => { const p = chain.then(run); chain = p.catch(() => {}); return p; };
 
-    return { sync, state: () => st, clearConflicts: () => { st.conflicts = []; save(); } };
+    return { sync, state: () => st, clearConflicts: () => { st.seenAt = now(); save(); } };
   }
 
   const api = { createSync, keyToPath, pathToKey, isSyncable, appPath, appIdOf, layoutToRecords, applyToLayout, isLayoutPath, hash, enc, dec };
