@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="it">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <meta name="theme-color" content="#F3F3F3" media="(prefers-color-scheme: light)">
+  <meta name="theme-color" content="#000000" media="(prefers-color-scheme: dark)">
+  <title>Suite</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Suite">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="shell">
+    <nav id="nav" aria-label="Sezioni"></nav>
+    <main id="main" tabindex="-1"></main>
+  </div>
+
+  <div id="runner" hidden>
+    <header id="runner-bar">
+      <button class="btn ghost" id="runner-back" aria-label="Torna alla Suite">← Suite</button>
+      <strong id="runner-title"></strong>
+      <span class="pill" id="runner-sync" title="Prototipo: dati salvati localmente">💾 Locale</span>
+    </header>
+    <iframe id="runner-frame" title="App" sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-popups"></iframe>
+  </div>
+
+  <dialog id="dlg"><form method="dialog" id="dlg-form"></form></dialog>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <input type="file" id="pick-folder" webkitdirectory hidden>
+  <input type="file" id="pick-file" accept=".html,.htm,.json" hidden>
+
+  <script src="layout.js"></script>
+  <script src="config.js"></script>
+  <script src="sync.js"></script>
+  <script src="drive-web.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
