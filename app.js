@@ -141,6 +141,8 @@
         <span class="ico">${ico}</span><span>${esc(name)}</span>${count != null ? `<span class="count">${count}</span>` : ''}</button>`;
     $('#nav').innerHTML = `<div class="brand"><i>A</i>Suite</div><div class="nav-label">Sezioni</div>` +
       l.sections.map((s) => item('section', s.id, esc(s.icon), s.name, s.apps.length, s.color)).join('') +
+      (openApps.size && multi() ? `<div class="nav-label">Aperte</div>` + [...openApps].map(([id, o]) =>
+        `<button class="nav-item" data-resume="${esc(id)}" style="--c:${esc(o.rec.manifest.color || 'var(--accent)')}"><span class="ico">${o.rec.iconData ? '●' : esc(o.rec.manifest.icon && !FILEISH.test(o.rec.manifest.icon) ? o.rec.manifest.icon : '●')}</span><span>${esc(o.rec.manifest.name)}</span></button>`).join('') : '') +
       `<div class="nav-label">Altro</div>` + item('all', '', '🗂️', 'Tutte le app', state.apps.size) +
       `<div class="nav-spacer"></div>` + item('manage', '', '🧩', 'Gestisci') + item('settings', '', '🎛️', 'Impostazioni') +
       (sync.on ? `<div class="nav-label" id="nav-sync" style="text-transform:none">${esc(syncLabel())}</div>` : '');
@@ -155,7 +157,7 @@
         <button class="tool" data-act="pin" data-id="${esc(id)}" aria-label="Preferito">${pinned ? '★' : '☆'}</button>
         <button class="tool danger" data-act="remove" data-id="${esc(id)}" aria-label="Togli dalla sezione">−</button></div>` : (pinned ? '<span class="pin">★</span>' : '');
     return `<button class="tile" data-open="${esc(id)}" style="--c:${esc(m.color || '#111111')}" ${opts.editSection ? 'tabindex="-1"' : ''}>
-      ${appIcon(rec, 'app-ico')}<h3>${esc(m.name)}</h3><p>${esc(m.description || '')}</p>${tools}</button>`;
+      ${openApps.has(id) ? '<span class="live" title="Aperta">●</span>' : ''}${appIcon(rec, 'app-ico')}<h3>${esc(m.name)}</h3><p>${esc(m.description || '')}</p>${tools}</button>`;
   }
 
   function sectionView(s) {
@@ -236,6 +238,9 @@
   function move(arr, id, d) { const a = [...arr], i = a.indexOf(id), j = i + d; if (i < 0 || j < 0 || j >= a.length) return a; [a[i], a[j]] = [a[j], a[i]]; return a; }
 
   document.addEventListener('click', (e) => {
+    const tab = e.target.closest('[data-tab]'); if (tab) return showApp(tab.dataset.tab);
+    const cl = e.target.closest('[data-closeapp]'); if (cl) return closeApp(cl.dataset.closeapp);
+    const res = e.target.closest('[data-resume]'); if (res) return showApp(res.dataset.resume);
     const nav = e.target.closest('[data-go]');
     if (nav) return go({ type: nav.dataset.go, id: nav.dataset.id || null });
     const act = e.target.closest('[data-act]');
@@ -289,6 +294,7 @@
     modal({ title: `Disinstallare "${r.manifest.name}"?`, body: '<label class="field" style="display:flex;gap:10px;align-items:center"><input type="checkbox" name="data"> Elimina anche i dati dell\'app</label>', submit: 'Disinstalla', danger: true,
       onSubmit: async (fd) => {
         const wipe = fd.get('data');
+        if (openApps.has(id)) closeApp(id);
         await delApp(id); await refreshApps();
         if (wipe) lsKeys().filter((k) => k.startsWith(`suite.data.${id}.`) || k.startsWith(`suite.ls.${id}.`)).forEach(lsDel);
         commit((l) => Layout.removeApp(l, id)); toast('App disinstallata');
@@ -368,7 +374,13 @@
   }
 
   /* ---------------- runtime + SDK host ---------------- */
-  const frame = $('#runner-frame'); let running = null;
+  /* Più app aperte insieme (solo Mac e Windows): ogni app ha il proprio iframe, che resta vivo anche quando si torna
+     alla Suite o si passa a un'altra scheda. Su iPhone/PWA resta una sola app alla volta. */
+  const framesBox = $('#runner-frames');
+  const openApps = new Map(); // id → { rec, frame }
+  let activeId = null;
+  const multi = () => (platform === 'mac' || platform === 'win') && !(navigator.maxTouchPoints > 1);
+  const entryOf = (source) => [...openApps.values()].find((o) => o.frame.contentWindow === source);
 
   function shim(id, theme, snapshot) {
     return `<script>(function(){
@@ -384,7 +396,7 @@ try{var ls={getItem:function(k){return Object.prototype.hasOwnProperty.call(snap
  Object.defineProperty(window,'localStorage',{value:ls,configurable:true});}catch(e){}
 window.suite={version:'1.0',
  storage:{get:function(k){return call('storage.get',[k]);},set:function(k,v){return call('storage.set',[k,v]);},remove:function(k){return call('storage.remove',[k]);}},
- files:{save:function(name,data,type){return call('files.save',[name,data,type]);}},
+ files:{save:function(name,data,type){return call('files.save',[name,data,type]);},open:function(accept){return call('files.open',[accept]);}},
  shared:{get:function(ns){return call('shared.get',[ns]);},set:function(ns,v){return call('shared.set',[ns,v]);}},
  nav:{home:function(){return call('nav.home');}},
  theme:{get:function(){return cur;}},
@@ -401,27 +413,79 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
   }
 
   async function openApp(id) {
-    const rec = state.apps.get(id) ? await getApp(id) : null; if (!rec) return toast('App non trovata');
+    if (multi() && openApps.has(id)) return showApp(id); // già aperta: porta in primo piano, senza ricaricarla
+    const rec = state.apps.has(id) ? await getApp(id) : null; if (!rec) return toast('App non trovata');
     state.layout = Layout.touchRecent(state.layout, id); saveLayout();
-    running = rec;
-    $('#runner-title').textContent = rec.manifest.name;
+    if (!multi()) [...openApps.keys()].forEach((k) => dropApp(k)); // una sola app alla volta (iPhone/PWA)
     const sh = shim(id, effectiveTheme(), snapshotLs(id));
     let html = rec.html;
     if (/<head[^>]*>/i.test(html)) html = html.replace(/<head[^>]*>/i, (m) => m + sh);
     else if (/<html[^>]*>/i.test(html)) html = html.replace(/<html[^>]*>/i, (m) => m + sh);
     else html = sh + html;
-    frame.srcdoc = html;
-    $('#runner').hidden = false; $('#runner-back').focus();
+    const fr = document.createElement('iframe');
+    fr.title = rec.manifest.name; fr.hidden = true;
+    fr.setAttribute('sandbox', 'allow-scripts allow-forms allow-modals allow-downloads allow-popups');
+    fr.srcdoc = html; framesBox.append(fr);
+    openApps.set(id, { rec, frame: fr });
+    showApp(id);
   }
-  function closeApp() { $('#runner').hidden = true; frame.srcdoc = ''; running = null; render(); }
-  $('#runner-back').addEventListener('click', closeApp);
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#runner').hidden && !dlg.open) closeApp(); });
-  function postTheme() { if (running && frame.contentWindow) frame.contentWindow.postMessage({ suiteTheme: effectiveTheme() }, '*'); }
+  /* porta in primo piano l'app `id` (le altre restano aperte, nascoste) */
+  function showApp(id) {
+    const o = openApps.get(id); if (!o) return;
+    activeId = id;
+    openApps.forEach((x, k) => { x.frame.hidden = k !== id; });
+    $('#runner-title').textContent = o.rec.manifest.name;
+    $('#runner-title').hidden = multi();
+    $('#runner').hidden = false; renderTabs(); renderNav();
+    o.frame.focus(); $('#runner-back').focus();
+  }
+  /* torna alla Suite lasciando le app aperte in background (multi) */
+  function showSuite() { $('#runner').hidden = true; render(); }
+  function dropApp(id) { const o = openApps.get(id); if (!o) return; o.frame.srcdoc = ''; o.frame.remove(); openApps.delete(id); }
+  function closeApp(id) {
+    id = id || activeId; dropApp(id);
+    if (activeId === id) {
+      activeId = null;
+      const last = [...openApps.keys()].pop();
+      if (last) return showApp(last);
+      $('#runner').hidden = true;
+    }
+    renderTabs(); render();
+  }
+  function renderTabs() {
+    const t = $('#runner-tabs');
+    t.innerHTML = multi() ? [...openApps].map(([id, o]) => `<div class="rtab" role="presentation" aria-selected="${id === activeId}">
+      <button role="tab" data-tab="${esc(id)}" aria-selected="${id === activeId}" title="${esc(o.rec.manifest.name)}">${esc(o.rec.manifest.name)}</button>
+      <button class="x" data-closeapp="${esc(id)}" aria-label="Chiudi ${esc(o.rec.manifest.name)}" title="Chiudi">×</button></div>`).join('') : '';
+  }
+  $('#runner-back').addEventListener('click', () => (multi() ? showSuite() : closeApp()));
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#runner').hidden && !dlg.open) (multi() ? showSuite() : closeApp()); });
+  function postTheme() { openApps.forEach((o) => { if (o.frame.contentWindow) o.frame.contentWindow.postMessage({ suiteTheme: effectiveTheme() }, '*'); }); }
 
-  const NEED = { 'storage.get': 'storage', 'storage.set': 'storage', 'storage.remove': 'storage', 'ls.set': 'storage', 'ls.remove': 'storage', 'files.save': 'files', 'shared.get': 'shared', 'shared.set': 'shared', 'notify': 'notifications' };
+  /* suite.files.open: la scelta del file avviene con un clic diretto dell'utente su un controllo della shell
+     (un input nascosto aperto da un postMessage perderebbe il gesto in WKWebView/Safari). Risponde {name, data:ArrayBuffer}. */
+  function pickFile(accept) {
+    return new Promise((resolve, reject) => {
+      const ov = document.createElement('div');
+      ov.style.cssText = 'position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px';
+      const box = document.createElement('div');
+      box.style.cssText = 'background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius,20px);padding:20px;max-width:420px;width:100%;box-shadow:var(--shadow)';
+      box.innerHTML = '<strong>Scegli il file</strong><p class="muted" style="margin:8px 0 12px"></p>';
+      const inp = document.createElement('input'); inp.type = 'file'; if (accept) inp.accept = String(accept); inp.style.cssText = 'width:100%;margin-bottom:12px';
+      const no = document.createElement('button'); no.className = 'btn ghost'; no.textContent = 'Annulla';
+      const done = (fn) => { ov.remove(); fn(); };
+      inp.addEventListener('change', async () => { const f = inp.files[0]; if (!f) return; try { const data = await f.arrayBuffer(); done(() => resolve({ name: f.name, data })); } catch (e) { done(() => reject(e)); } });
+      no.addEventListener('click', () => done(() => reject(new Error('annullato'))));
+      box.append(inp, no); ov.append(box); document.body.append(ov); inp.focus();
+    });
+  }
+
+  const NEED = { 'storage.get': 'storage', 'storage.set': 'storage', 'storage.remove': 'storage', 'ls.set': 'storage', 'ls.remove': 'storage', 'files.save': 'files', 'files.open': 'files', 'shared.get': 'shared', 'shared.set': 'shared', 'notify': 'notifications' };
   window.addEventListener('message', async (e) => {
     const d = e.data;
-    if (!d || !d.suite || !running || e.source !== frame.contentWindow) return;
+    const ent = d && d.suite ? entryOf(e.source) : null; // l'app che ha chiamato (ognuna ha il suo iframe)
+    if (!ent) return;
+    const running = ent.rec, frame = ent.frame;
     const id = running.id, perms = running.manifest.permissions;
     const reply = (r) => frame.contentWindow && frame.contentWindow.postMessage(Object.assign({ suiteReply: 1, id: d.id }, r), '*');
     const need = NEED[d.method];
@@ -437,13 +501,14 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         case 'ls.remove': lsDel(`suite.ls.${id}.${a}`); return reply({ result: true });
         case 'shared.get': { const v = lsGet(`suite.shared.${a}`); return reply({ result: v == null ? null : JSON.parse(v) }); }
         case 'shared.set': lsSet(`suite.shared.${a}`, JSON.stringify(b)); return reply({ result: true });
-        case 'nav.home': closeApp(); return;
+        case 'nav.home': if (multi()) showSuite(); else closeApp(id); return;
         case 'notify': toast(`${a}${b ? ' — ' + b : ''}`); return reply({ result: true });
         case 'files.save': {
           const blob = a && b instanceof Blob ? b : new Blob([b], { type: c || 'application/octet-stream' });
           const url = URL.createObjectURL(blob), el = document.createElement('a'); el.href = url; el.download = a || 'file'; el.click();
           setTimeout(() => URL.revokeObjectURL(url), 2000); return reply({ result: true });
         }
+        case 'files.open': return reply({ result: await pickFile(a) });
         default: return reply({ error: 'unknown-method' });
       }
     } catch (err) { reply({ error: err.message }); }
@@ -503,7 +568,8 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
   }
 
   /* ---------------- sincronizzazione con SuiteData ---------------- */
-  const fsBridge = (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suiteFS) || null;
+  const fsBridge = (window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suiteFS) // macOS
+    || (window.chrome && window.chrome.webview ? SuiteSync.webviewBridge(window.chrome.webview) : null); // Windows (WebView2)
   const sync = { editedAt: 0, on: false, folder: null, engine: null, timer: null, suppress: false, status: 'off', busy: false, pending: new Map() };
   const platform = /Mac/i.test(navigator.platform || '') ? 'mac' : /Win/i.test(navigator.platform || '') ? 'win' : 'ios';
   function deviceId() {
@@ -565,7 +631,7 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         state.layout = norm(state.layout);
         try { localStorage.setItem('suite.layout', JSON.stringify(state.layout)); } catch (e) { /* noop */ }
         applyTheme();
-        if (running && changed.some((p) => p.startsWith(`data/${running.id}/`) || p.startsWith(`apps/${running.id}`))) toast('Dati aggiornati da un altro dispositivo: riapri l\'app');
+        if ([...openApps.keys()].some((rid) => changed.some((p) => p.startsWith(`data/${rid}/`) || p.startsWith(`apps/${rid}`)))) toast('Dati aggiornati da un altro dispositivo: riapri l\'app');
         if ($('#runner').hidden) render();
       } finally { sync.suppress = false; }
     },
@@ -670,7 +736,7 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
   setInterval(() => { if (sync.on && !document.hidden) syncNow(false); }, 60000);
 
   /* PWA: offline per la shell (solo su https o localhost; non nel guscio nativo) */
-  if ('serviceWorker' in navigator && /^https:$/.test(location.protocol) || (location.hostname === '127.0.0.1' && 'serviceWorker' in navigator)) {
+  if (!fsBridge && 'serviceWorker' in navigator && (/^https:$/.test(location.protocol) || location.hostname === '127.0.0.1')) {
     navigator.serviceWorker.register('sw.js').catch(() => { /* noop */ });
   }
 
