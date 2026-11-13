@@ -186,7 +186,19 @@
     return { sync, state: () => st, clearConflicts: () => { st.seenAt = now(); save(); } };
   }
 
-  const api = { createSync, keyToPath, pathToKey, isSyncable, appPath, appIdOf, layoutToRecords, applyToLayout, isLayoutPath, hash, enc, dec };
+  /* WebView2 (Windows) non risponde alle chiamate come WKWebView: la richiesta {id, ...} e la risposta {id, result|error}
+     viaggiano su due canali. Questo adattatore li trasforma in una Promise, così la shell usa lo stesso `postMessage` ovunque. */
+  function webviewBridge(wv) {
+    let n = 0; const pend = new Map();
+    wv.addEventListener('message', (e) => {
+      const d = e.data; if (!d || typeof d.id !== 'number' || !pend.has(d.id)) return;
+      const p = pend.get(d.id); pend.delete(d.id);
+      if (d.error) p.rej(new Error(d.error)); else p.res(d.result === undefined ? null : d.result);
+    });
+    return { postMessage: (msg) => new Promise((res, rej) => { const id = ++n; pend.set(id, { res, rej }); wv.postMessage(Object.assign({ id }, msg)); }) };
+  }
+
+  const api = { webviewBridge, createSync, keyToPath, pathToKey, isSyncable, appPath, appIdOf, layoutToRecords, applyToLayout, isLayoutPath, hash, enc, dec };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SuiteSync = api;
 })(typeof self !== 'undefined' ? self : this);
