@@ -26,9 +26,10 @@
     <header id="runner-bar">
       <button class="btn ghost" id="runner-back" aria-label="Torna alla Suite">← Suite</button>
       <strong id="runner-title"></strong>
+      <div id="runner-tabs" role="tablist" aria-label="App aperte"></div>
       <span class="pill" id="runner-sync" title="Prototipo: dati salvati localmente">💾 Locale</span>
     </header>
-    <iframe id="runner-frame" title="App" sandbox="allow-scripts allow-forms allow-modals allow-downloads allow-popups"></iframe>
+    <div id="runner-frames"></div>
   </div>
 
   <dialog id="dlg"><form method="dialog" id="dlg-form"></form></dialog>
