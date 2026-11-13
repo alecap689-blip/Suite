@@ -239,3 +239,10 @@ input[type=text], select, textarea { box-shadow: inset 0 1px 3px rgba(0,0,0,.14)
 /* Titoli nitidi: nessuna ombra (sfocava le lettere), sfondo più scuro dietro l'intestazione */
 .page-head h1 { text-shadow: none; font-weight: 800; color: var(--text); }
 .page-head p { color: color-mix(in srgb, var(--text) 72%, var(--bg)); }
+
+/* App installata sull'iPhone (standalone): iOS sfuma in automatico la fascia appena sotto la barra di stato,
+   quindi il contenuto non deve partire a ridosso di quel bordo. In Safari non serve. */
+@media (display-mode: standalone) and (max-width: 760px) {
+  #main { padding-top: calc(env(safe-area-inset-top, 0px) + 36px); }
+  #runner-bar { padding-top: calc(env(safe-area-inset-top, 0px) + 22px); }
+}
