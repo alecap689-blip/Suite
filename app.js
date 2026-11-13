@@ -23,16 +23,18 @@
   let dbp;
   function db() {
     if (!dbp) dbp = new Promise((res, rej) => {
-      const r = indexedDB.open('suite', 1);
-      r.onupgradeneeded = () => r.result.createObjectStore('apps', { keyPath: 'id' });
+      const r = indexedDB.open('suite', 2);
+      r.onupgradeneeded = () => { const d = r.result; /* 'linked' (v2): copia locale dei file collegati su Drive, per l'uso offline */
+        if (!d.objectStoreNames.contains('apps')) d.createObjectStore('apps', { keyPath: 'id' });
+        if (!d.objectStoreNames.contains('linked')) d.createObjectStore('linked', { keyPath: 'id' }); };
       r.onsuccess = () => res(r.result); r.onerror = () => rej(r.error);
     });
     return dbp;
   }
-  async function tx(mode, fn) {
+  async function tx(mode, fn, store = 'apps') {
     const d = await db();
     return new Promise((res, rej) => {
-      const t = d.transaction('apps', mode); const out = fn(t.objectStore('apps'));
+      const t = d.transaction(store, mode); const out = fn(t.objectStore(store));
       t.oncomplete = () => res(out && out.result !== undefined ? out.result : undefined); t.onerror = () => rej(t.error);
     });
   }
@@ -383,7 +385,8 @@
   const entryOf = (source) => [...openApps.values()].find((o) => o.frame.contentWindow === source);
 
   function shim(id, theme, snapshot) {
-    return `<script>(function(){
+    const NP = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suitePrint); // Mac: stampa nativa
+    return `<script data-suite-shim>(function(){
 var snap=${JSON.stringify(snapshot).replace(/</g, '\\u003c')},n=0,pend={};
 function call(method,args){return new Promise(function(res,rej){var i=++n;pend[i]={res:res,rej:rej};parent.postMessage({suite:1,id:i,method:method,args:args||[]},'*');});}
 addEventListener('message',function(e){var d=e.data;if(!d)return;
@@ -391,7 +394,27 @@ addEventListener('message',function(e){var d=e.data;if(!d)return;
  if(d.suiteTheme)setTheme(d.suiteTheme);});
 function setTheme(t){document.documentElement.setAttribute('data-theme',t);document.documentElement.style.colorScheme=t;
  var ev=new CustomEvent('themechange',{detail:t});dispatchEvent(ev);}
-var cur=${JSON.stringify(theme)};
+var cur=${JSON.stringify(theme)},NP=${NP};
+/* Stampa: ⌘P / Ctrl+P, pulsante della Suite e window.print() delle app. Mac: istantanea del documento → finestra di stampa nativa
+   (WKWebView non stampa da un iframe). Windows/altri: stampa nativa del browser su questo iframe. */
+var _print=window.print?window.print.bind(window):function(){},busy=false;
+function snapDoc(){var c=document.documentElement.cloneNode(true);
+ [].forEach.call(document.querySelectorAll('input,textarea,select'),function(el,i){var k=c.querySelectorAll('input,textarea,select')[i];if(!k)return;
+  if(el.tagName==='TEXTAREA')k.textContent=el.value;else if(el.tagName==='SELECT'){[].forEach.call(k.options,function(o,j){o.selected=el.options[j].selected;if(o.selected)o.setAttribute('selected','');else o.removeAttribute('selected');});}
+  else if(el.type==='checkbox'||el.type==='radio'){if(el.checked)k.setAttribute('checked','');else k.removeAttribute('checked');}else k.setAttribute('value',el.value);});
+ [].forEach.call(document.querySelectorAll('canvas'),function(cv,i){var k=c.querySelectorAll('canvas')[i];if(!k)return;try{var im=document.createElement('img');im.src=cv.toDataURL();im.style.cssText=cv.style.cssText;im.width=cv.width;im.height=cv.height;k.replaceWith(im);}catch(e){}});
+ [].forEach.call(c.querySelectorAll('script'),function(x){x.remove();});
+ c.setAttribute('data-theme','light');c.style.colorScheme='light';
+ return '<!doctype html>'+c.outerHTML;}
+function nativePrint(){if(busy)return;busy=true;
+ try{dispatchEvent(new Event('beforeprint'));}catch(e){}
+ setTimeout(function(){var done=function(){busy=false;try{dispatchEvent(new Event('afterprint'));}catch(e){}};
+  var html;try{html=snapDoc();}catch(e){done();return;}
+  call('print',[html,document.title]).then(done,done);},60);}
+if(NP)window.print=nativePrint;
+function printReq(){var ev=new CustomEvent('suiteprint',{cancelable:true});if(dispatchEvent(ev))window.print();}
+addEventListener('message',function(e){if(e.data&&e.data.suitePrint)printReq();});
+addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&(e.key==='p'||e.key==='P')){e.preventDefault();printReq();}});
 try{var ls={getItem:function(k){return Object.prototype.hasOwnProperty.call(snap,k)?snap[k]:null},setItem:function(k,v){snap[k]=String(v);call('ls.set',[k,String(v)]);},removeItem:function(k){delete snap[k];call('ls.remove',[k]);},clear:function(){Object.keys(snap).forEach(function(k){call('ls.remove',[k]);});snap={};},key:function(i){return Object.keys(snap)[i]||null},get length(){return Object.keys(snap).length}};
  Object.defineProperty(window,'localStorage',{value:ls,configurable:true});}catch(e){}
 window.suite={version:'1.0',
@@ -400,6 +423,7 @@ window.suite={version:'1.0',
   link:function(accept){return call('files.link',[accept]);},linked:function(){return call('files.linked');},saveLinked:function(data,type){return call('files.saveLinked',[data,type]);},unlink:function(){return call('files.unlink');}},
  shared:{get:function(ns){return call('shared.get',[ns]);},set:function(ns,v){return call('shared.set',[ns,v]);}},
  nav:{home:function(){return call('nav.home');}},
+ print:function(){printReq();},
  theme:{get:function(){return cur;}},
  notify:function(t,b){return call('notify',[t,b]);}};
 addEventListener('themechange',function(e){cur=e.detail;});
@@ -461,6 +485,17 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
   }
   $('#runner-back').addEventListener('click', () => (multi() ? showSuite() : closeApp()));
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('#runner').hidden && !dlg.open) (multi() ? showSuite() : closeApp()); });
+  /* Stampa dell'app in primo piano (menu Mac, ⌘P / Ctrl+P, pulsante nella barra) */
+  function printActive() {
+    const o = openApps.get(activeId);
+    if ($('#runner').hidden || !o || !o.frame.contentWindow) return toast("Apri un'app per stamparla");
+    o.frame.contentWindow.postMessage({ suitePrint: 1 }, '*');
+  }
+  window.__suitePrint = printActive;
+  $('#runner-print').addEventListener('click', printActive);
+  document.addEventListener('keydown', (e) => {
+    if ((e.metaKey || e.ctrlKey) && !e.shiftKey && !e.altKey && (e.key === 'p' || e.key === 'P') && !$('#runner').hidden) { e.preventDefault(); printActive(); }
+  });
   function postTheme() { openApps.forEach((o) => { if (o.frame.contentWindow) o.frame.contentWindow.postMessage({ suiteTheme: effectiveTheme() }, '*'); }); }
 
   /* suite.files.open: la scelta del file avviene con un clic diretto dell'utente su un controllo della shell
@@ -504,6 +539,12 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         case 'shared.set': lsSet(`suite.shared.${a}`, JSON.stringify(b)); return reply({ result: true });
         case 'nav.home': if (multi()) showSuite(); else closeApp(id); return;
         case 'notify': toast(`${a}${b ? ' — ' + b : ''}`); return reply({ result: true });
+        case 'print': { // solo Mac: finestra di stampa nativa con l'istantanea inviata dall'app
+          const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suitePrint;
+          if (!h) return reply({ result: 'local' });
+          await h.postMessage({ html: String(a || ''), title: String(b || running.manifest.name) });
+          return reply({ result: 'native' });
+        }
         case 'files.save': {
           const blob = a && b instanceof Blob ? b : new Blob([b], { type: c || 'application/octet-stream' });
           const url = URL.createObjectURL(blob), el = document.createElement('a'); el.href = url; el.download = a || 'file'; el.click();
@@ -702,8 +743,8 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
     if (!d) { d = `${platform}-${Math.random().toString(36).slice(2, 8)}`; try { localStorage.setItem('suite.deviceId', d); } catch (e) { /* noop */ } }
     return d;
   }
-  const STATUS = { login: '🔑 Accedi a Google', ok: '✓ Aggiornato', sync: '⟳ Sincronizzo…', conflict: '⚠ Conflitto', error: '☁︎✕ Cartella non raggiungibile', off: '💾 Locale' };
-  const syncLabel = () => STATUS[sync.status] || STATUS.off;
+  const STATUS = { login: '🔑 Accedi a Google', ok: '✓ Aggiornato', sync: '⟳ Sincronizzo…', conflict: '⚠ Conflitto', error: '☁︎✕ Cartella non raggiungibile', off: '💾 Locale', offline: '✈︎ Offline: i dati restano su questo dispositivo' };
+  const syncLabel = () => (sync.on && navigator.onLine === false && webMode ? STATUS.offline : STATUS[sync.status] || STATUS.off);
   function setStatus(s) {
     sync.status = s;
     const el = $('#runner-sync'); if (el) { el.textContent = syncLabel(); el.title = sync.folder ? 'SuiteData: ' + sync.folder : 'Dati salvati solo su questo dispositivo'; }
@@ -829,7 +870,8 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
     getWebAuth().signOut(); clearTimeout(sync.timer); sync.engine = null; sync.on = false; sync.folder = null; setStatus('off'); render();
     toast('Sincronizzazione disattivata: i dati restano su questo dispositivo');
   }
-  window.addEventListener('online', () => { if (sync.on) schedule(500); });
+  window.addEventListener('online', () => { setStatus(sync.status); if (sync.on) schedule(500); });
+  window.addEventListener('offline', () => setStatus(sync.status));
 
   function syncRows() {
     if (webMode) {

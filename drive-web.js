@@ -186,7 +186,7 @@
       },
       async meta(id) {
         const x = await (await api(`${API}/files/${encodeURIComponent(id)}?fields=${encodeURIComponent(FIELDS)}`)).json();
-        return { id: x.id, name: x.name, mtime: x.modifiedTime, trashed: !!x.trashed };
+        return { id: x.id, name: x.name, mtime: x.modifiedTime, trashed: !!x.trashed, parent: (x.parents || [])[0] || null };
       },
       async download(id) { return (await api(`${API}/files/${encodeURIComponent(id)}?alt=media`)).arrayBuffer(); },
       /* riscrive il contenuto dello stesso file (Drive conserva da solo le versioni precedenti); restituisce il nuovo mtime */
