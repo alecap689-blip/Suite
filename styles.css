@@ -196,23 +196,23 @@ dialog h2 { margin: 0 0 18px; letter-spacing: -.02em; }
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --bg-grad: radial-gradient(1100px 650px at 12% -8%, #7C7C85 0%, rgba(124,124,133,0) 64%),
+    --bg-grad: radial-gradient(1100px 650px at 12% -8%, #686870 0%, rgba(104,104,112,0) 62%),
                radial-gradient(900px 600px at 100% 105%, #52525A 0%, rgba(82,82,90,0) 70%),
                linear-gradient(160deg, #28282C 0%, #131315 100%);
     --surface-grad: linear-gradient(165deg, #3C3C42 0%, #1F1F23 100%);
     --glass-grad: linear-gradient(180deg, rgba(58,58,64,.72), rgba(30,30,34,.6));
     --hi: inset 0 1px 0 rgba(255,255,255,.10), inset 0 -1px 0 rgba(0,0,0,.5);
-    --glow: rgba(255,255,255,.22);
+    --glow: rgba(255,255,255,.07);
   }
 }
 :root[data-theme="dark"] {
-  --bg-grad: radial-gradient(1100px 650px at 12% -8%, #7C7C85 0%, rgba(124,124,133,0) 64%),
+  --bg-grad: radial-gradient(1100px 650px at 12% -8%, #686870 0%, rgba(104,104,112,0) 62%),
              radial-gradient(900px 600px at 100% 105%, #52525A 0%, rgba(82,82,90,0) 70%),
              linear-gradient(160deg, #28282C 0%, #131315 100%);
   --surface-grad: linear-gradient(165deg, #3C3C42 0%, #1F1F23 100%);
   --glass-grad: linear-gradient(180deg, rgba(58,58,64,.72), rgba(30,30,34,.6));
   --hi: inset 0 1px 0 rgba(255,255,255,.10), inset 0 -1px 0 rgba(0,0,0,.5);
-  --glow: rgba(255,255,255,.22);
+  --glow: rgba(255,255,255,.07);
 }
 html, body { background: var(--bg-grad); background-color: var(--bg); background-attachment: fixed; }
 #nav { background: var(--glass-grad); }
@@ -236,3 +236,6 @@ input[type=text], select, textarea { box-shadow: inset 0 1px 3px rgba(0,0,0,.14)
 #runner-bar { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
 @media (max-width: 760px) { #nav { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; } }
 
+/* Titoli leggibili sulla luce di sfondo (scuro) */
+.page-head h1 { text-shadow: 0 1px 12px rgba(0,0,0,.35); }
+.page-head p { color: color-mix(in srgb, var(--text) 72%, var(--bg)); }
