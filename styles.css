@@ -236,5 +236,3 @@ input[type=text], select, textarea { box-shadow: inset 0 1px 3px rgba(0,0,0,.14)
 #runner-bar { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
 @media (max-width: 760px) { #nav { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; } }
 
-/* Fascia piena sotto la barra di stato dell'iPhone (app installata, barra trasparente): il testo che scorre non deve passarci sotto */
-body::before { content: ""; position: fixed; top: 0; left: 0; right: 0; height: env(safe-area-inset-top, 0px); background: var(--bg); z-index: 120; pointer-events: none; }
