@@ -157,7 +157,39 @@
     };
   }
 
-  const api = { createDriveDriver, createAuth, SCOPE };
+  /* ---------- file collegati (es. un Excel ovunque in Il mio Drive): cerca, scarica, riscrive lo stesso file ---------- */
+  function createFiles({ fetch: f, getToken }) {
+    const doFetch = f || root.fetch.bind(root);
+    async function api(url, opts = {}, retry = true) {
+      const token = await getToken(false);
+      const res = await doFetch(url, Object.assign({}, opts, { headers: Object.assign({ Authorization: 'Bearer ' + token }, opts.headers || {}) }));
+      if (res.status === 401 && retry) { await getToken(true); return api(url, opts, false); }
+      if (!res.ok) { const e = new Error(`Drive ${res.status}`); e.status = res.status; throw e; }
+      return res;
+    }
+    const FIELDS = 'id,name,modifiedTime,size,trashed';
+    return {
+      /* file il cui nome finisce con `ext` (es. ".xlsx"), i più recenti per primi */
+      async search(ext) {
+        const e = String(ext || '').toLowerCase();
+        const qs = `${e ? `name contains '${q(e)}' and ` : ''}mimeType != '${FOLDER}' and trashed=false`;
+        const r = await (await api(`${API}/files?q=${encodeURIComponent(qs)}&fields=${encodeURIComponent(`files(${FIELDS})`)}&orderBy=${encodeURIComponent('modifiedTime desc')}&pageSize=100`)).json();
+        return (r.files || []).filter((x) => !e || String(x.name).toLowerCase().endsWith(e)).map((x) => ({ id: x.id, name: x.name, mtime: x.modifiedTime, size: Number(x.size) || 0 }));
+      },
+      async meta(id) {
+        const x = await (await api(`${API}/files/${encodeURIComponent(id)}?fields=${encodeURIComponent(FIELDS)}`)).json();
+        return { id: x.id, name: x.name, mtime: x.modifiedTime, trashed: !!x.trashed };
+      },
+      async download(id) { return (await api(`${API}/files/${encodeURIComponent(id)}?alt=media`)).arrayBuffer(); },
+      /* riscrive il contenuto dello stesso file (Drive conserva da solo le versioni precedenti); restituisce il nuovo mtime */
+      async upload(id, data, type) {
+        const r = await (await api(`${UPLOAD}/files/${encodeURIComponent(id)}?uploadType=media&fields=id,modifiedTime`, { method: 'PATCH', headers: { 'Content-Type': type || 'application/octet-stream' }, body: data })).json();
+        return r.modifiedTime;
+      },
+    };
+  }
+
+  const api = { createDriveDriver, createFiles, createAuth, SCOPE };
   if (typeof module !== 'undefined' && module.exports) module.exports = api;
   else root.SuiteDrive = api;
 })(typeof self !== 'undefined' ? self : this);
