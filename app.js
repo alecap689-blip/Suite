@@ -396,7 +396,8 @@ try{var ls={getItem:function(k){return Object.prototype.hasOwnProperty.call(snap
  Object.defineProperty(window,'localStorage',{value:ls,configurable:true});}catch(e){}
 window.suite={version:'1.0',
  storage:{get:function(k){return call('storage.get',[k]);},set:function(k,v){return call('storage.set',[k,v]);},remove:function(k){return call('storage.remove',[k]);}},
- files:{save:function(name,data,type){return call('files.save',[name,data,type]);},open:function(accept){return call('files.open',[accept]);}},
+ files:{save:function(name,data,type){return call('files.save',[name,data,type]);},open:function(accept){return call('files.open',[accept]);},
+  link:function(accept){return call('files.link',[accept]);},linked:function(){return call('files.linked');},saveLinked:function(data,type){return call('files.saveLinked',[data,type]);},unlink:function(){return call('files.unlink');}},
  shared:{get:function(ns){return call('shared.get',[ns]);},set:function(ns,v){return call('shared.set',[ns,v]);}},
  nav:{home:function(){return call('nav.home');}},
  theme:{get:function(){return cur;}},
@@ -480,7 +481,7 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
     });
   }
 
-  const NEED = { 'storage.get': 'storage', 'storage.set': 'storage', 'storage.remove': 'storage', 'ls.set': 'storage', 'ls.remove': 'storage', 'files.save': 'files', 'files.open': 'files', 'shared.get': 'shared', 'shared.set': 'shared', 'notify': 'notifications' };
+  const NEED = { 'storage.get': 'storage', 'storage.set': 'storage', 'storage.remove': 'storage', 'ls.set': 'storage', 'ls.remove': 'storage', 'files.save': 'files', 'files.open': 'files', 'files.link': 'files', 'files.linked': 'files', 'files.saveLinked': 'files', 'files.unlink': 'files', 'shared.get': 'shared', 'shared.set': 'shared', 'notify': 'notifications' };
   window.addEventListener('message', async (e) => {
     const d = e.data;
     const ent = d && d.suite ? entryOf(e.source) : null; // l'app che ha chiamato (ognuna ha il suo iframe)
@@ -509,10 +510,82 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
           setTimeout(() => URL.revokeObjectURL(url), 2000); return reply({ result: true });
         }
         case 'files.open': return reply({ result: await pickFile(a) });
+        /* file collegato su Google Drive (solo versione web/PWA): l'app sceglie un file una volta, poi lo rilegge e lo riscrive */
+        case 'files.link': {
+          if (!cloudFilesOn()) return reply({ error: 'unavailable' });
+          const f = await pickCloudFile(a);
+          lsSet(`suite.link.${id}`, JSON.stringify({ id: f.id, name: f.name, mtime: f.mtime }));
+          return reply({ result: { name: f.name, data: f.data } });
+        }
+        case 'files.linked': {
+          const lk = cloudFilesOn() ? linkOf(id) : null; if (!lk) return reply({ result: null });
+          let m; try { m = await cloudFiles().meta(lk.id); } catch (err) { if (err.status === 404) m = { trashed: true }; else throw err; }
+          if (m.trashed) { lsDel(`suite.link.${id}`); return reply({ result: null }); }
+          const data = await cloudFiles().download(lk.id);
+          lsSet(`suite.link.${id}`, JSON.stringify({ id: lk.id, name: m.name, mtime: m.mtime }));
+          return reply({ result: { name: m.name, data } });
+        }
+        case 'files.saveLinked': {
+          const lk = cloudFilesOn() ? linkOf(id) : null; if (!lk) return reply({ error: 'unlinked' });
+          const m = await cloudFiles().meta(lk.id);
+          if (m.trashed) return reply({ error: 'unlinked' });
+          if (m.mtime !== lk.mtime) return reply({ error: 'changed' }); // modificato altrove dopo l'ultima lettura: l'app deve rileggerlo
+          const mtime = await cloudFiles().upload(lk.id, a instanceof Blob ? a : new Blob([a], { type: b || 'application/octet-stream' }), b);
+          lsSet(`suite.link.${id}`, JSON.stringify({ id: lk.id, name: m.name, mtime }));
+          return reply({ result: { name: m.name } });
+        }
+        case 'files.unlink': lsDel(`suite.link.${id}`); return reply({ result: true });
         default: return reply({ error: 'unknown-method' });
       }
-    } catch (err) { reply({ error: err.message }); }
+    } catch (err) { reply({ error: err && err.code === 'auth' ? 'auth' : err.message }); }
   });
+
+  /* ---- file collegati su Google Drive (versione web) ---- */
+  let cloudFilesApi = null;
+  const cloudFilesOn = () => webMode && !!googleClientId();
+  const cloudFiles = () => cloudFilesApi || (cloudFilesApi = SuiteDrive.createFiles({ getToken: (force) => getWebAuth().getToken(force) }));
+  const linkOf = (id) => { try { const x = JSON.parse(lsGet(`suite.link.${id}`)); return x && x.id ? x : null; } catch (e) { return null; } };
+  /* Riquadro della shell con l'elenco dei file di Drive che finiscono con `accept` (es. ".xlsx"). Risponde {id, name, mtime, data}.
+     Se serve il login, il pulsante «Accedi a Google» è un tocco diretto dell'utente (necessario per il popup). */
+  function pickCloudFile(accept) {
+    return new Promise((resolve, reject) => {
+      const el = (tag, css, text) => { const x = document.createElement(tag); if (css) x.style.cssText = css; if (text != null) x.textContent = text; return x; };
+      const ov = el('div', 'position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px');
+      const box = el('div', 'background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius,20px);padding:20px;max-width:460px;width:100%;max-height:80vh;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow)');
+      const msg = el('p', 'margin:0'); msg.className = 'muted';
+      const list = el('div', 'overflow-y:auto;display:flex;flex-direction:column;gap:8px;min-height:0');
+      const bar = el('div', 'display:flex;gap:8px;justify-content:flex-end');
+      const no = el('button', '', 'Annulla'); no.className = 'btn ghost';
+      const done = (fn) => { ov.remove(); fn(); };
+      no.addEventListener('click', () => done(() => reject(new Error('annullato'))));
+      async function choose(f) {
+        list.replaceChildren(); msg.textContent = `Scarico «${f.name}»…`;
+        try { const data = await cloudFiles().download(f.id); done(() => resolve({ id: f.id, name: f.name, mtime: f.mtime, data })); }
+        catch (e) { msg.textContent = 'Download non riuscito: ' + (e && e.message || e); load(); }
+      }
+      async function load() {
+        msg.textContent = 'Cerco i file su Google Drive…'; list.replaceChildren();
+        let files;
+        try { files = await cloudFiles().search(accept); }
+        catch (e) {
+          if (!(e && e.code === 'auth')) { msg.textContent = 'Google Drive non raggiungibile: ' + (e && e.message || e); return; }
+          msg.textContent = 'Per leggere il file serve l\'accesso a Google.';
+          const b = el('button', '', 'Accedi a Google'); b.className = 'btn primary';
+          b.addEventListener('click', async () => { try { await getWebAuth().signIn(); load(); } catch (e2) { msg.textContent = 'Accesso a Google non riuscito.'; } });
+          list.append(b); return;
+        }
+        msg.textContent = files.length ? 'Tocca il file da collegare: la Suite lo rileggerà e lo salverà direttamente su Drive.' : `Nessun file ${accept || ''} trovato su Google Drive.`;
+        files.forEach((f) => {
+          const b = el('button', 'display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;height:auto;padding:10px 14px;white-space:normal'); b.className = 'btn';
+          const d = f.mtime ? new Date(f.mtime).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : '';
+          b.append(el('b', 'overflow-wrap:anywhere', f.name), el('small', 'opacity:.7', `Modificato ${d}`));
+          b.addEventListener('click', () => choose(f)); list.append(b);
+        });
+      }
+      bar.append(no); box.append(el('strong', '', 'File su Google Drive'), msg, list, bar); ov.append(box); document.body.append(ov);
+      load();
+    });
+  }
 
   /* ---------------- backup / reset ---------------- */
   async function exportBackup() {
