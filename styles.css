@@ -146,7 +146,19 @@ input[type=color] { width: 56px; height: 44px; padding: 3px; border-radius: 13px
 #runner-bar { display: flex; align-items: center; gap: 12px; padding: max(10px, env(safe-area-inset-top)) 14px 10px; background: var(--glass);
   backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px); border-bottom: 1px solid var(--border); }
 #runner-bar strong { flex: 1; }
-#runner-frame { flex: 1; border: 0; width: 100%; background: var(--bg); }
+#runner-frames { flex: 1; position: relative; min-height: 0; }
+#runner-frames iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; background: var(--bg); }
+#runner-frames iframe[hidden] { display: none; }
+/* schede delle app aperte (solo Mac e Windows) */
+#runner-tabs { flex: 1; display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+#runner-tabs::-webkit-scrollbar { display: none; }
+#runner-tabs:empty { display: none; }
+.rtab { display: flex; align-items: center; flex: 0 1 auto; min-width: 0; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); }
+.rtab[aria-selected="true"] { background: var(--surface); box-shadow: var(--shadow); font-weight: 700; }
+.rtab button { background: none; border: 0; color: inherit; font: inherit; cursor: pointer; padding: 6px 4px 6px 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.rtab button.x { padding: 6px 10px 6px 6px; color: var(--text-muted); }
+.rtab button.x:hover { color: var(--danger, var(--text)); }
+.tile .live { position: absolute; top: 12px; left: 14px; font-size: 10px; color: var(--ok, var(--text)); }
 
 /* ---------- Dialog / toast ---------- */
 dialog { border: 1px solid var(--border); border-radius: 26px; padding: 26px; width: min(460px, calc(100vw - 32px)); background: var(--surface); color: var(--text); box-shadow: var(--shadow-lg); }
