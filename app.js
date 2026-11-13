@@ -512,20 +512,36 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         case 'files.open': return reply({ result: await pickFile(a) });
         /* file collegato su Google Drive (solo versione web/PWA): l'app sceglie un file una volta, poi lo rilegge e lo riscrive */
         case 'files.link': {
+          if (fsBridge) { // guscio Mac/Windows: file del disco, scelto con il pannello di sistema e ricordato dal guscio
+            const f = await nativeFile('fileChoose', { app: id, accept: a });
+            nativeMtime.set(id, f.mtime);
+            return reply({ result: { name: f.name, data: b64ToBuf(f.data), kind: 'local', locked: !!f.locked } });
+          }
           if (!cloudFilesOn()) return reply({ error: 'unavailable' });
-          const f = await pickCloudFile(a);
+          const f = await pickCloudFile(a, linkOf(id));
           lsSet(`suite.link.${id}`, JSON.stringify({ id: f.id, name: f.name, mtime: f.mtime }));
-          return reply({ result: { name: f.name, data: f.data } });
+          return reply({ result: { name: f.name, data: f.data, kind: 'drive' } });
         }
         case 'files.linked': {
+          if (fsBridge) {
+            let f; try { f = await nativeFile('fileRead', { app: id }); } catch (err) { if (err.message === 'unavailable') return reply({ result: null }); throw err; }
+            if (!f) return reply({ result: null });
+            nativeMtime.set(id, f.mtime);
+            return reply({ result: { name: f.name, data: b64ToBuf(f.data), kind: 'local', locked: !!f.locked } });
+          }
           const lk = cloudFilesOn() ? linkOf(id) : null; if (!lk) return reply({ result: null });
           let m; try { m = await cloudFiles().meta(lk.id); } catch (err) { if (err.status === 404) m = { trashed: true }; else throw err; }
           if (m.trashed) { lsDel(`suite.link.${id}`); return reply({ result: null }); }
           const data = await cloudFiles().download(lk.id);
           lsSet(`suite.link.${id}`, JSON.stringify({ id: lk.id, name: m.name, mtime: m.mtime }));
-          return reply({ result: { name: m.name, data } });
+          return reply({ result: { name: m.name, data, kind: 'drive' } });
         }
         case 'files.saveLinked': {
+          if (fsBridge) { // errori: unlinked, locked (aperto in Excel), changed (modificato dopo l'ultima lettura)
+            const r = await nativeFile('fileWrite', { app: id, data: await bufToB64(a), mtime: nativeMtime.has(id) ? nativeMtime.get(id) : -1 });
+            nativeMtime.set(id, r.mtime);
+            return reply({ result: { name: r.name } });
+          }
           const lk = cloudFilesOn() ? linkOf(id) : null; if (!lk) return reply({ error: 'unlinked' });
           const m = await cloudFiles().meta(lk.id);
           if (m.trashed) return reply({ error: 'unlinked' });
@@ -534,11 +550,21 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
           lsSet(`suite.link.${id}`, JSON.stringify({ id: lk.id, name: m.name, mtime }));
           return reply({ result: { name: m.name } });
         }
-        case 'files.unlink': lsDel(`suite.link.${id}`); return reply({ result: true });
+        case 'files.unlink': if (fsBridge) { nativeMtime.delete(id); await nativeFile('fileUnlink', { app: id }); return reply({ result: true }); }
+          lsDel(`suite.link.${id}`); return reply({ result: true });
         default: return reply({ error: 'unknown-method' });
       }
     } catch (err) { reply({ error: err && err.code === 'auth' ? 'auth' : err.message }); }
   });
+
+  /* ---- file collegati sul disco (guscio Mac/Windows): il guscio ricorda il percorso per ogni app, lo rilegge e lo riscrive ---- */
+  const nativeMtime = new Map(); // id app → data di modifica del file all'ultima lettura/scrittura (per accorgersi di modifiche fatte altrove)
+  async function nativeFile(op, args) {
+    try { return await fsBridge.postMessage(Object.assign({ op }, args)); }
+    catch (e) { const m = String((e && e.message) || e); throw new Error(/operazione sconosciuta/.test(m) ? 'unavailable' : m); } // guscio vecchio: l'app ripiega su files.open
+  }
+  const b64ToBuf = (s) => { const bin = atob(s), u = new Uint8Array(bin.length); for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i); return u.buffer; };
+  const bufToB64 = async (data) => { const u = new Uint8Array(await new Blob([data]).arrayBuffer()); let s = ''; for (let i = 0; i < u.length; i += 0x8000) s += String.fromCharCode.apply(null, u.subarray(i, i + 0x8000)); return btoa(s); };
 
   /* ---- file collegati su Google Drive (versione web) ---- */
   let cloudFilesApi = null;
@@ -547,42 +573,68 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
   const linkOf = (id) => { try { const x = JSON.parse(lsGet(`suite.link.${id}`)); return x && x.id ? x : null; } catch (e) { return null; } };
   /* Riquadro della shell con l'elenco dei file di Drive che finiscono con `accept` (es. ".xlsx"). Risponde {id, name, mtime, data}.
      Se serve il login, il pulsante «Accedi a Google» è un tocco diretto dell'utente (necessario per il popup). */
-  function pickCloudFile(accept) {
+  function pickCloudFile(accept, current) {
     return new Promise((resolve, reject) => {
       const el = (tag, css, text) => { const x = document.createElement(tag); if (css) x.style.cssText = css; if (text != null) x.textContent = text; return x; };
-      const ov = el('div', 'position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px');
-      const box = el('div', 'background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius,20px);padding:20px;max-width:460px;width:100%;max-height:80vh;display:flex;flex-direction:column;gap:12px;box-shadow:var(--shadow)');
-      const msg = el('p', 'margin:0'); msg.className = 'muted';
-      const list = el('div', 'overflow-y:auto;display:flex;flex-direction:column;gap:8px;min-height:0');
-      const bar = el('div', 'display:flex;gap:8px;justify-content:flex-end');
+      const ov = el('div', 'position:fixed;inset:0;z-index:80;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:max(12px,env(safe-area-inset-top)) 12px max(12px,env(safe-area-inset-bottom))');
+      const box = el('div', 'background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:var(--radius,20px);padding:18px;max-width:460px;width:100%;max-height:100%;display:flex;flex-direction:column;gap:10px;box-shadow:var(--shadow);overflow:hidden');
+      const msg = el('p', 'margin:0;font-size:14px;color:var(--text-muted)');
+      const find = el('input', 'flex:0 0 auto'); find.type = 'text'; find.placeholder = 'Cerca per nome o cartella'; find.hidden = true;
+      find.setAttribute('autocapitalize', 'off'); find.setAttribute('autocorrect', 'off'); find.setAttribute('aria-label', 'Cerca tra i file');
+      /* l'elenco è l'unica parte che scorre; le righe non si restringono (flex:0 0 auto), altrimenti si schiacciano */
+      const list = el('div', 'flex:1 1 auto;min-height:0;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;display:flex;flex-direction:column;gap:6px');
+      const bar = el('div', 'flex:0 0 auto;display:flex;gap:8px;justify-content:flex-end');
       const no = el('button', '', 'Annulla'); no.className = 'btn ghost';
       const done = (fn) => { ov.remove(); fn(); };
       no.addEventListener('click', () => done(() => reject(new Error('annullato'))));
+      let files = [], names = {}, showBk = false;
+      const folder = (f) => names[f.parent] || '';
+      const isBk = (f) => /^(backup|copie)/i.test(folder(f)); // le copie di sicurezza stanno in fondo, chiuse
+      const size = (n) => (n ? (n >= 1048576 ? (n / 1048576).toLocaleString('it-IT', { maximumFractionDigits: 1 }) + ' MB' : Math.max(1, Math.round(n / 1024)) + ' kB') : '');
       async function choose(f) {
-        list.replaceChildren(); msg.textContent = `Scarico «${f.name}»…`;
+        list.replaceChildren(); find.hidden = true; msg.textContent = `Scarico «${f.name}»…`;
         try { const data = await cloudFiles().download(f.id); done(() => resolve({ id: f.id, name: f.name, mtime: f.mtime, data })); }
         catch (e) { msg.textContent = 'Download non riuscito: ' + (e && e.message || e); load(); }
       }
+      function row(f) {
+        const b = el('button', 'flex:0 0 auto;display:flex;flex-direction:column;align-items:stretch;gap:3px;text-align:left;height:auto;padding:10px 12px;white-space:normal;font-weight:400'); b.className = 'btn';
+        const top = el('span', 'display:flex;gap:8px;align-items:center');
+        top.append(el('b', 'flex:1;min-width:0;overflow-wrap:anywhere', f.name));
+        if (current && current.id === f.id) { const p = el('span', 'flex:0 0 auto', 'collegato ora'); p.className = 'pill'; top.append(p); }
+        const d = f.mtime ? new Date(f.mtime).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : '';
+        b.append(top, el('small', 'color:var(--text-muted)', [folder(f) ? `Cartella «${folder(f)}»` : '', d ? `modificato ${d}` : '', size(f.size)].filter(Boolean).join(' · ')));
+        b.addEventListener('click', () => choose(f)); return b;
+      }
+      function draw() {
+        const q = find.value.trim().toLowerCase();
+        const vis = files.filter((f) => !q || `${f.name} ${folder(f)}`.toLowerCase().includes(q));
+        const main = vis.filter((f) => !isBk(f)), bk = vis.filter(isBk), open = showBk || !!q || !main.length;
+        list.replaceChildren(...main.map(row));
+        if (bk.length) {
+          const t = el('button', 'flex:0 0 auto;justify-content:flex-start', `${open ? '▾' : '▸'} Copie di backup (${bk.length})`); t.className = 'btn ghost sm';
+          t.addEventListener('click', () => { showBk = !open; draw(); });
+          list.append(t); if (open) list.append(...bk.map(row));
+        }
+        if (!vis.length) list.append(el('p', 'margin:8px 0;color:var(--text-muted)', 'Nessun file corrisponde alla ricerca.'));
+      }
+      find.addEventListener('input', draw);
       async function load() {
-        msg.textContent = 'Cerco i file su Google Drive…'; list.replaceChildren();
-        let files;
+        msg.textContent = 'Cerco i file su Google Drive…'; list.replaceChildren(); find.hidden = true;
         try { files = await cloudFiles().search(accept); }
         catch (e) {
           if (!(e && e.code === 'auth')) { msg.textContent = 'Google Drive non raggiungibile: ' + (e && e.message || e); return; }
           msg.textContent = 'Per leggere il file serve l\'accesso a Google.';
-          const b = el('button', '', 'Accedi a Google'); b.className = 'btn primary';
+          const b = el('button', 'flex:0 0 auto', 'Accedi a Google'); b.className = 'btn primary';
           b.addEventListener('click', async () => { try { await getWebAuth().signIn(); load(); } catch (e2) { msg.textContent = 'Accesso a Google non riuscito.'; } });
           list.append(b); return;
         }
-        msg.textContent = files.length ? 'Tocca il file da collegare: la Suite lo rileggerà e lo salverà direttamente su Drive.' : `Nessun file ${accept || ''} trovato su Google Drive.`;
-        files.forEach((f) => {
-          const b = el('button', 'display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;height:auto;padding:10px 14px;white-space:normal'); b.className = 'btn';
-          const d = f.mtime ? new Date(f.mtime).toLocaleString('it-IT', { dateStyle: 'short', timeStyle: 'short' }) : '';
-          b.append(el('b', 'overflow-wrap:anywhere', f.name), el('small', 'opacity:.7', `Modificato ${d}`));
-          b.addEventListener('click', () => choose(f)); list.append(b);
-        });
+        names = {};
+        try { if (cloudFiles().folderNames) names = await cloudFiles().folderNames(files.map((f) => f.parent)); } catch (e) { /* l'elenco resta senza cartelle */ }
+        if (current) files.sort((x, y) => (y.id === current.id) - (x.id === current.id)); // il file già collegato per primo
+        msg.textContent = files.length ? 'Tocca il file da collegare: verrà riletto e salvato direttamente su Drive.' : `Nessun file ${accept || ''} trovato su Google Drive.`;
+        find.hidden = files.length < 6; find.value = ''; showBk = false; draw();
       }
-      bar.append(no); box.append(el('strong', '', 'File su Google Drive'), msg, list, bar); ov.append(box); document.body.append(ov);
+      bar.append(no); box.append(el('strong', 'flex:0 0 auto', 'File su Google Drive'), msg, find, list, bar); ov.append(box); document.body.append(ov);
       load();
     });
   }

@@ -167,14 +167,22 @@
       if (!res.ok) { const e = new Error(`Drive ${res.status}`); e.status = res.status; throw e; }
       return res;
     }
-    const FIELDS = 'id,name,modifiedTime,size,trashed';
+    const FIELDS = 'id,name,modifiedTime,size,trashed,parents';
     return {
       /* file il cui nome finisce con `ext` (es. ".xlsx"), i più recenti per primi */
       async search(ext) {
         const e = String(ext || '').toLowerCase();
         const qs = `${e ? `name contains '${q(e)}' and ` : ''}mimeType != '${FOLDER}' and trashed=false`;
         const r = await (await api(`${API}/files?q=${encodeURIComponent(qs)}&fields=${encodeURIComponent(`files(${FIELDS})`)}&orderBy=${encodeURIComponent('modifiedTime desc')}&pageSize=100`)).json();
-        return (r.files || []).filter((x) => !e || String(x.name).toLowerCase().endsWith(e)).map((x) => ({ id: x.id, name: x.name, mtime: x.modifiedTime, size: Number(x.size) || 0 }));
+        return (r.files || []).filter((x) => !e || String(x.name).toLowerCase().endsWith(e)).map((x) => ({ id: x.id, name: x.name, mtime: x.modifiedTime, size: Number(x.size) || 0, parent: (x.parents || [])[0] || null }));
+      },
+      /* nomi delle cartelle (id → nome), per mostrare dove sta ogni file; una cartella non leggibile viene saltata */
+      async folderNames(ids) {
+        const out = {};
+        await Promise.all([...new Set(ids || [])].filter(Boolean).slice(0, 40).map(async (id) => {
+          try { const x = await (await api(`${API}/files/${encodeURIComponent(id)}?fields=${encodeURIComponent('id,name')}`)).json(); if (x && x.name) out[id] = x.name; } catch (e) { /* senza nome */ }
+        }));
+        return out;
       },
       async meta(id) {
         const x = await (await api(`${API}/files/${encodeURIComponent(id)}?fields=${encodeURIComponent(FIELDS)}`)).json();

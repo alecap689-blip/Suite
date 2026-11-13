@@ -231,3 +231,7 @@ input[type=text], select, textarea { box-shadow: inset 0 1px 3px rgba(0,0,0,.14)
 #runner-bar { background: var(--glass-grad); }
 
 @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; transition: none !important; } }
+
+/* Barre in alto/in basso opache: con la trasparenza e la sfocatura il contenuto che scorre dietro rendeva il titolo poco leggibile */
+#runner-bar { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; }
+@media (max-width: 760px) { #nav { background: var(--surface); -webkit-backdrop-filter: none; backdrop-filter: none; } }
