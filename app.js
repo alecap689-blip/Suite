@@ -387,19 +387,33 @@
   const IOS_SHELL = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   /* iPhone/iPad: stampa dalla pagina principale. L'app invia l'istantanea del suo documento; qui la si mette in un iframe a tutta pagina
      (visibile solo in stampa, vedi styles.css) e si chiama window.print() della shell. */
-  function printWeb(html) {
+  function printWeb(html, title) {
     return new Promise((resolve) => {
-      const old = document.getElementById('print-frame'); if (old) old.remove();
+      ['print-frame', 'print-ask'].forEach((i) => { const o = document.getElementById(i); if (o) o.remove(); });
       const f = document.createElement('iframe'); f.id = 'print-frame'; f.setAttribute('aria-hidden', 'true'); f.title = 'Stampa';
-      const fine = () => { document.body.classList.remove('printing'); setTimeout(() => f.remove(), 1500); };
+      const ask = document.createElement('div'); ask.id = 'print-ask';
+      ask.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px';
+      ask.innerHTML = '<div style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:20px;padding:20px;max-width:360px;width:100%;box-shadow:var(--shadow)">'
+        + '<strong style="font-size:17px">Stampa</strong><p class="muted" style="margin:8px 0 14px">Tocca «Stampa» per aprire la stampa di iOS (anche «Salva PDF»).</p>'
+        + '<div style="display:flex;flex-direction:column;gap:8px"><button class="btn primary" id="pa-go" disabled>Preparo…</button><button class="btn" id="pa-open">Apri come pagina</button><button class="btn ghost" id="pa-no">Chiudi</button></div></div>';
+      const chiudi = () => { document.body.classList.remove('printing'); ask.remove(); setTimeout(() => f.remove(), 1500); resolve(); };
+      document.body.append(f, ask);
+      ask.querySelector('#pa-no').addEventListener('click', chiudi);
+      ask.querySelector('#pa-open').addEventListener('click', () => { // ripiego: pagina a sé (in Safari: Condividi → Stampa / Salva PDF)
+        const url = URL.createObjectURL(new Blob([html], { type: 'text/html' })); const w = window.open(url, '_blank'); if (!w) location.href = url; setTimeout(() => URL.revokeObjectURL(url), 60000);
+      });
+      const go = ask.querySelector('#pa-go');
+      go.addEventListener('click', () => { // gesto diretto dell'utente nella pagina principale
+        document.body.classList.add('printing');
+        try { window.print(); } catch (e) { toast('Stampa non disponibile: usa «Apri come pagina»'); }
+        setTimeout(() => document.body.classList.remove('printing'), 1000);
+      });
+      addEventListener('afterprint', () => document.body.classList.remove('printing'));
       f.onload = () => {
         try { const d = f.contentDocument; f.style.height = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0) + 'px'; } catch (e) { /* ignora */ }
-        document.body.classList.add('printing');
-        addEventListener('afterprint', fine, { once: true });
-        setTimeout(() => { try { window.print(); } catch (e) { fine(); } resolve(); }, 250);
-        setTimeout(fine, 120000);
+        go.disabled = false; go.textContent = 'Stampa';
       };
-      document.body.appendChild(f); f.srcdoc = html;
+      f.srcdoc = html;
     });
   }
 
@@ -562,7 +576,7 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         case 'print': { // solo Mac: finestra di stampa nativa con l'istantanea inviata dall'app
           const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suitePrint;
           if (!h) {
-            if (IOS_SHELL) { try { await printWeb(String(a || '')); } catch (e) { /* ignora */ } return reply({ result: 'web' }); }
+            if (IOS_SHELL) { try { await printWeb(String(a || ''), String(b || '')); } catch (e) { /* ignora */ } return reply({ result: 'web' }); }
             return reply({ result: 'local' });
           }
           await h.postMessage({ html: String(a || ''), title: String(b || running.manifest.name) });
