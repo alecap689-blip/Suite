@@ -246,3 +246,18 @@ input[type=text], select, textarea { box-shadow: inset 0 1px 3px rgba(0,0,0,.14)
   #main { padding-top: calc(env(safe-area-inset-top, 0px) + 36px); }
   #runner-bar { padding-top: calc(env(safe-area-inset-top, 0px) + 22px); }
 }
+
+/* Barra dell'app su telefono: una sola riga compatta, titolo che si accorcia con i puntini */
+@media (max-width: 760px) {
+  #runner-bar { gap: 6px; padding-left: 10px; padding-right: 10px; }
+  #runner-bar .btn { min-height: 40px; padding: 0 10px; white-space: nowrap; }
+  #runner-bar strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+  #runner-sync { white-space: nowrap; font-size: 12px; flex: none; }
+}
+/* Stampa da iPhone/iPad: l'istantanea dell'app sta in #print-frame, fuori schermo; in stampa resta solo quella */
+#print-frame { position: absolute; left: 0; top: -100000px; width: 100%; height: 800px; border: 0; visibility: hidden; pointer-events: none; background: #fff; }
+@media print {
+  body.printing > *:not(#print-frame) { display: none !important; }
+  body.printing #print-frame { position: static !important; visibility: visible !important; width: 100% !important; }
+  body.printing, html { height: auto !important; overflow: visible !important; background: #fff !important; }
+}

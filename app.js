@@ -384,6 +384,25 @@
   const multi = () => (platform === 'mac' || platform === 'win') && !(navigator.maxTouchPoints > 1);
   const entryOf = (source) => [...openApps.values()].find((o) => o.frame.contentWindow === source);
 
+  const IOS_SHELL = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  /* iPhone/iPad: stampa dalla pagina principale. L'app invia l'istantanea del suo documento; qui la si mette in un iframe a tutta pagina
+     (visibile solo in stampa, vedi styles.css) e si chiama window.print() della shell. */
+  function printWeb(html) {
+    return new Promise((resolve) => {
+      const old = document.getElementById('print-frame'); if (old) old.remove();
+      const f = document.createElement('iframe'); f.id = 'print-frame'; f.setAttribute('aria-hidden', 'true'); f.title = 'Stampa';
+      const fine = () => { document.body.classList.remove('printing'); setTimeout(() => f.remove(), 1500); };
+      f.onload = () => {
+        try { const d = f.contentDocument; f.style.height = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0) + 'px'; } catch (e) { /* ignora */ }
+        document.body.classList.add('printing');
+        addEventListener('afterprint', fine, { once: true });
+        setTimeout(() => { try { window.print(); } catch (e) { fine(); } resolve(); }, 250);
+        setTimeout(fine, 120000);
+      };
+      document.body.appendChild(f); f.srcdoc = html;
+    });
+  }
+
   function shim(id, theme, snapshot) {
     const NP = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suitePrint); // Mac: stampa nativa
     return `<script data-suite-shim>(function(){
@@ -411,7 +430,8 @@ function nativePrint(){if(busy)return;busy=true;
  setTimeout(function(){var done=function(){busy=false;try{dispatchEvent(new Event('afterprint'));}catch(e){}};
   var html;try{html=snapDoc();}catch(e){done();return;}
   call('print',[html,document.title]).then(done,done);},60);}
-if(NP)window.print=nativePrint;
+var IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+if(NP||IOS)window.print=nativePrint; /* iOS: window.print() dentro un iframe non funziona: l'istantanea passa alla shell, che stampa dalla pagina principale */
 function printReq(){var ev=new CustomEvent('suiteprint',{cancelable:true});if(dispatchEvent(ev))window.print();}
 addEventListener('message',function(e){if(e.data&&e.data.suitePrint)printReq();});
 addEventListener('keydown',function(e){if((e.metaKey||e.ctrlKey)&&!e.shiftKey&&!e.altKey&&(e.key==='p'||e.key==='P')){e.preventDefault();printReq();}});
@@ -541,7 +561,10 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         case 'notify': toast(`${a}${b ? ' — ' + b : ''}`); return reply({ result: true });
         case 'print': { // solo Mac: finestra di stampa nativa con l'istantanea inviata dall'app
           const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suitePrint;
-          if (!h) return reply({ result: 'local' });
+          if (!h) {
+            if (IOS_SHELL) { try { await printWeb(String(a || '')); } catch (e) { /* ignora */ } return reply({ result: 'web' }); }
+            return reply({ result: 'local' });
+          }
           await h.postMessage({ html: String(a || ''), title: String(b || running.manifest.name) });
           return reply({ result: 'native' });
         }
