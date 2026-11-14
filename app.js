@@ -387,39 +387,83 @@
   const IOS_SHELL = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   /* iPhone/iPad: stampa dalla pagina principale. L'app invia l'istantanea del suo documento; qui la si mette in un iframe a tutta pagina
      (visibile solo in stampa, vedi styles.css) e si chiama window.print() della shell. */
-  /* Riquadro «Stampa» (iPhone/iPad): compare SUBITO al tocco di «Stampa»; quando l'app invia l'istantanea (ready) il pulsante si attiva. */
-  function printAsk() {
+  /* Stampa su iPhone/iPad. Nell'app installata (schermata Home) iOS ignora window.print(): si genera quindi un PDF dal documento
+     (HTML → immagine SVG → pagine A4 JPEG → PDF minimo) e lo si passa al foglio di condivisione (Stampa / Salva su File). */
+  async function pdfDaFrame(f) {
+    const W = 794, PH = 1123, SC = 1.5;                       // pagina A4 a 96 dpi, risoluzione ×1,5
+    const d = f.contentDocument; if (d.fonts && d.fonts.ready) await d.fonts.ready;
+    const H = Math.max(PH, d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0);
+    const xhtml = new XMLSerializer().serializeToString(d.documentElement);
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" width="' + W + '" height="' + H + '"><foreignObject x="0" y="0" width="100%" height="100%">' + xhtml + '</foreignObject></svg>';
+    const img = new Image(); img.decoding = 'sync';
+    await new Promise((ok, ko) => { img.onload = ok; img.onerror = () => ko(new Error('immagine del documento non creata')); img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg); });
+    const n = Math.min(40, Math.ceil(H / PH)), pages = [];
+    for (let i = 0; i < n; i++) {
+      const c = document.createElement('canvas'); c.width = Math.round(W * SC); c.height = Math.round(PH * SC);
+      const x = c.getContext('2d'); x.fillStyle = '#fff'; x.fillRect(0, 0, c.width, c.height);
+      x.drawImage(img, 0, -i * PH * SC, W * SC, H * SC);
+      const u = atob(c.toDataURL('image/jpeg', 0.85).split(',')[1]), bytes = new Uint8Array(u.length);
+      for (let k = 0; k < u.length; k++) bytes[k] = u.charCodeAt(k);
+      pages.push({ bytes, w: c.width, h: c.height });
+    }
+    // PDF minimo: catalogo, elenco pagine e, per ogni pagina, pagina + contenuto + immagine JPEG
+    const enc = new TextEncoder(), parts = [], off = []; let len = 0;
+    const put = (x) => { const b = typeof x === 'string' ? enc.encode(x) : x; parts.push(b); len += b.length; };
+    const obj = (id, body) => { off[id] = len; put(id + ' 0 obj\n'); put(body); put('\nendobj\n'); };
+    put('%PDF-1.4\n');
+    obj(1, '<< /Type /Catalog /Pages 2 0 R >>');
+    obj(2, '<< /Type /Pages /Count ' + n + ' /Kids [' + pages.map((_, i) => (3 + i * 3) + ' 0 R').join(' ') + '] >>');
+    pages.forEach((pg, i) => {
+      const id = 3 + i * 3, cs = 'q 595.28 0 0 841.89 0 0 cm /Im0 Do Q';
+      obj(id, '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595.28 841.89] /Contents ' + (id + 1) + ' 0 R /Resources << /XObject << /Im0 ' + (id + 2) + ' 0 R >> >> >>');
+      obj(id + 1, '<< /Length ' + cs.length + ' >>\nstream\n' + cs + '\nendstream');
+      off[id + 2] = len; put((id + 2) + ' 0 obj\n<< /Type /XObject /Subtype /Image /Width ' + pg.w + ' /Height ' + pg.h + ' /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ' + pg.bytes.length + ' >>\nstream\n'); put(pg.bytes); put('\nendstream\nendobj\n');
+    });
+    const total = 3 + n * 3, xr = len;
+    put('xref\n0 ' + total + '\n0000000000 65535 f \n'); for (let i = 1; i < total; i++) put(String(off[i]).padStart(10, '0') + ' 00000 n \n');
+    put('trailer\n<< /Size ' + total + ' /Root 1 0 R >>\nstartxref\n' + xr + '\n%%EOF');
+    return new Blob(parts, { type: 'application/pdf' });
+  }
+  /* Riquadro «Stampa»: compare SUBITO al tocco; quando l'app invia l'istantanea il PDF si prepara e i pulsanti si attivano. */
+  function printAsk(titolo) {
     let ask = document.getElementById('print-ask');
     if (ask) return ask._ctl;
-    const f = document.createElement('iframe'); f.id = 'print-frame'; f.setAttribute('aria-hidden', 'true'); f.title = 'Stampa';
+    const f = document.createElement('iframe'); f.id = 'print-frame'; f.setAttribute('aria-hidden', 'true'); f.title = 'Stampa'; f.style.width = '794px';
     ask = document.createElement('div'); ask.id = 'print-ask';
     ask.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px';
     ask.innerHTML = '<div style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:20px;padding:20px;max-width:360px;width:100%;box-shadow:var(--shadow)">'
       + '<strong style="font-size:17px">Stampa</strong><p class="muted" id="pa-msg" style="margin:8px 0 14px">Preparo il documento…</p>'
-      + '<div style="display:flex;flex-direction:column;gap:8px"><button class="btn primary" id="pa-go" disabled>Preparo…</button><button class="btn" id="pa-open" disabled>Apri come pagina</button><button class="btn ghost" id="pa-no">Chiudi</button></div></div>';
+      + '<div style="display:flex;flex-direction:column;gap:8px"><button class="btn primary" id="pa-go" disabled>Preparo…</button><button class="btn" id="pa-open" disabled>Salva / apri PDF</button><button class="btn ghost" id="pa-no">Chiudi</button></div></div>';
     document.body.append(f, ask);
-    let html = '', t = 0;
+    let pdf = null, t = 0;
     const msg = ask.querySelector('#pa-msg'), go = ask.querySelector('#pa-go'), op = ask.querySelector('#pa-open');
-    const chiudi = () => { clearTimeout(t); document.body.classList.remove('printing'); ask.remove(); setTimeout(() => f.remove(), 1500); };
+    const nomeF = () => ((titolo || 'Documento').replace(/[^\w\- ]+/g, '').trim() || 'Documento') + '.pdf';
+    const chiudi = () => { clearTimeout(t); ask.remove(); setTimeout(() => f.remove(), 1500); };
     ask.querySelector('#pa-no').addEventListener('click', chiudi);
-    op.addEventListener('click', () => { // ripiego: pagina a sé (in Safari: Condividi → Stampa / Salva PDF)
-      const url = URL.createObjectURL(new Blob([html], { type: 'text/html' })); const w = window.open(url, '_blank'); if (!w) location.href = url; setTimeout(() => URL.revokeObjectURL(url), 60000);
+    go.addEventListener('click', async () => { // gesto diretto dell'utente: foglio di condivisione di iOS (Stampa, Salva su File, …)
+      if (!pdf) return;
+      try {
+        const nome = nomeF(), file = new File([pdf], nome, { type: 'application/pdf' });
+        if (navigator.canShare && navigator.canShare({ files: [file] })) await navigator.share({ files: [file], title: nome });
+        else { msg.textContent = 'Condivisione non disponibile: usa «Salva / apri PDF».'; }
+      } catch (e) { if (e && e.name !== 'AbortError') msg.textContent = 'Condivisione non riuscita (' + (e.name || '') + ' ' + (e.message || '') + '): prova «Salva / apri PDF».'; }
     });
-    go.addEventListener('click', () => { // gesto diretto dell'utente nella pagina principale
-      document.body.classList.add('printing');
-      try { window.print(); } catch (e) { msg.textContent = 'Stampa non disponibile: prova «Apri come pagina».'; }
-      setTimeout(() => document.body.classList.remove('printing'), 1000);
+    op.addEventListener('click', () => {
+      if (!pdf) return;
+      const url = URL.createObjectURL(pdf), a = document.createElement('a'); a.href = url; a.download = nomeF(); a.target = '_blank'; document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 120000);
     });
-    addEventListener('afterprint', () => document.body.classList.remove('printing'));
-    f.onload = () => {
-      try { const d = f.contentDocument; f.style.height = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0) + 'px'; } catch (e) { /* ignora */ }
-      msg.textContent = 'Tocca «Stampa» per aprire la stampa di iOS (anche «Salva PDF»).'; go.disabled = false; go.textContent = 'Stampa'; op.disabled = false;
+    f.onload = async () => {
+      try {
+        pdf = await pdfDaFrame(f);
+        msg.textContent = 'PDF pronto (' + Math.max(1, Math.round(pdf.size / 1024)) + ' KB). Tocca «Condividi / Stampa» e scegli Stampa o Salva su File.'; go.textContent = 'Condividi / Stampa'; go.disabled = false; op.disabled = false;
+      } catch (e) { msg.textContent = 'Non riesco a creare il PDF: ' + (e && (e.name + ' ' + e.message)); go.textContent = 'Non disponibile'; }
     };
     t = setTimeout(() => { msg.textContent = "L'app non ha inviato il documento da stampare. Chiudi e riprova; se resta così riapri la Suite."; }, 5000);
-    ask._ctl = { ready: (h) => { clearTimeout(t); html = h; f.srcdoc = h; }, fail: (m) => { clearTimeout(t); msg.textContent = m; } };
+    ask._ctl = { ready: (h, tit) => { clearTimeout(t); titolo = tit || titolo; f.srcdoc = h; }, fail: (m) => { clearTimeout(t); msg.textContent = m; } };
     return ask._ctl;
   }
-  function printWeb(html) { printAsk().ready(html); return Promise.resolve(); }
+  function printWeb(html, titolo) { printAsk().ready(html, titolo); return Promise.resolve(); }
 
   function shim(id, theme, snapshot) {
     const NP = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suitePrint); // Mac: stampa nativa
