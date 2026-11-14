@@ -387,35 +387,39 @@
   const IOS_SHELL = /iPhone|iPad|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
   /* iPhone/iPad: stampa dalla pagina principale. L'app invia l'istantanea del suo documento; qui la si mette in un iframe a tutta pagina
      (visibile solo in stampa, vedi styles.css) e si chiama window.print() della shell. */
-  function printWeb(html, title) {
-    return new Promise((resolve) => {
-      ['print-frame', 'print-ask'].forEach((i) => { const o = document.getElementById(i); if (o) o.remove(); });
-      const f = document.createElement('iframe'); f.id = 'print-frame'; f.setAttribute('aria-hidden', 'true'); f.title = 'Stampa';
-      const ask = document.createElement('div'); ask.id = 'print-ask';
-      ask.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px';
-      ask.innerHTML = '<div style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:20px;padding:20px;max-width:360px;width:100%;box-shadow:var(--shadow)">'
-        + '<strong style="font-size:17px">Stampa</strong><p class="muted" style="margin:8px 0 14px">Tocca «Stampa» per aprire la stampa di iOS (anche «Salva PDF»).</p>'
-        + '<div style="display:flex;flex-direction:column;gap:8px"><button class="btn primary" id="pa-go" disabled>Preparo…</button><button class="btn" id="pa-open">Apri come pagina</button><button class="btn ghost" id="pa-no">Chiudi</button></div></div>';
-      const chiudi = () => { document.body.classList.remove('printing'); ask.remove(); setTimeout(() => f.remove(), 1500); resolve(); };
-      document.body.append(f, ask);
-      ask.querySelector('#pa-no').addEventListener('click', chiudi);
-      ask.querySelector('#pa-open').addEventListener('click', () => { // ripiego: pagina a sé (in Safari: Condividi → Stampa / Salva PDF)
-        const url = URL.createObjectURL(new Blob([html], { type: 'text/html' })); const w = window.open(url, '_blank'); if (!w) location.href = url; setTimeout(() => URL.revokeObjectURL(url), 60000);
-      });
-      const go = ask.querySelector('#pa-go');
-      go.addEventListener('click', () => { // gesto diretto dell'utente nella pagina principale
-        document.body.classList.add('printing');
-        try { window.print(); } catch (e) { toast('Stampa non disponibile: usa «Apri come pagina»'); }
-        setTimeout(() => document.body.classList.remove('printing'), 1000);
-      });
-      addEventListener('afterprint', () => document.body.classList.remove('printing'));
-      f.onload = () => {
-        try { const d = f.contentDocument; f.style.height = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0) + 'px'; } catch (e) { /* ignora */ }
-        go.disabled = false; go.textContent = 'Stampa';
-      };
-      f.srcdoc = html;
+  /* Riquadro «Stampa» (iPhone/iPad): compare SUBITO al tocco di «Stampa»; quando l'app invia l'istantanea (ready) il pulsante si attiva. */
+  function printAsk() {
+    let ask = document.getElementById('print-ask');
+    if (ask) return ask._ctl;
+    const f = document.createElement('iframe'); f.id = 'print-frame'; f.setAttribute('aria-hidden', 'true'); f.title = 'Stampa';
+    ask = document.createElement('div'); ask.id = 'print-ask';
+    ask.style.cssText = 'position:fixed;inset:0;z-index:200;background:rgba(0,0,0,.45);display:flex;align-items:center;justify-content:center;padding:20px';
+    ask.innerHTML = '<div style="background:var(--surface);color:var(--text);border:1px solid var(--border);border-radius:20px;padding:20px;max-width:360px;width:100%;box-shadow:var(--shadow)">'
+      + '<strong style="font-size:17px">Stampa</strong><p class="muted" id="pa-msg" style="margin:8px 0 14px">Preparo il documento…</p>'
+      + '<div style="display:flex;flex-direction:column;gap:8px"><button class="btn primary" id="pa-go" disabled>Preparo…</button><button class="btn" id="pa-open" disabled>Apri come pagina</button><button class="btn ghost" id="pa-no">Chiudi</button></div></div>';
+    document.body.append(f, ask);
+    let html = '', t = 0;
+    const msg = ask.querySelector('#pa-msg'), go = ask.querySelector('#pa-go'), op = ask.querySelector('#pa-open');
+    const chiudi = () => { clearTimeout(t); document.body.classList.remove('printing'); ask.remove(); setTimeout(() => f.remove(), 1500); };
+    ask.querySelector('#pa-no').addEventListener('click', chiudi);
+    op.addEventListener('click', () => { // ripiego: pagina a sé (in Safari: Condividi → Stampa / Salva PDF)
+      const url = URL.createObjectURL(new Blob([html], { type: 'text/html' })); const w = window.open(url, '_blank'); if (!w) location.href = url; setTimeout(() => URL.revokeObjectURL(url), 60000);
     });
+    go.addEventListener('click', () => { // gesto diretto dell'utente nella pagina principale
+      document.body.classList.add('printing');
+      try { window.print(); } catch (e) { msg.textContent = 'Stampa non disponibile: prova «Apri come pagina».'; }
+      setTimeout(() => document.body.classList.remove('printing'), 1000);
+    });
+    addEventListener('afterprint', () => document.body.classList.remove('printing'));
+    f.onload = () => {
+      try { const d = f.contentDocument; f.style.height = Math.max(d.documentElement.scrollHeight, d.body ? d.body.scrollHeight : 0) + 'px'; } catch (e) { /* ignora */ }
+      msg.textContent = 'Tocca «Stampa» per aprire la stampa di iOS (anche «Salva PDF»).'; go.disabled = false; go.textContent = 'Stampa'; op.disabled = false;
+    };
+    t = setTimeout(() => { msg.textContent = "L'app non ha inviato il documento da stampare. Chiudi e riprova; se resta così riapri la Suite."; }, 5000);
+    ask._ctl = { ready: (h) => { clearTimeout(t); html = h; f.srcdoc = h; }, fail: (m) => { clearTimeout(t); msg.textContent = m; } };
+    return ask._ctl;
   }
+  function printWeb(html) { printAsk().ready(html); return Promise.resolve(); }
 
   function shim(id, theme, snapshot) {
     const NP = !!(window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suitePrint); // Mac: stampa nativa
@@ -523,8 +527,7 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
   function printActive() {
     const o = openApps.get(activeId);
     if ($('#runner').hidden || !o || !o.frame.contentWindow) return toast("Apri un'app per stamparla");
-    toast('Stampa: preparo il documento…');
-    clearTimeout(printWait); printWait = setTimeout(() => toast("Stampa: l'app non ha risposto (riapri la Suite)"), 4000);
+    if (IOS_SHELL) printAsk(); else { toast('Stampa: preparo il documento…'); clearTimeout(printWait); printWait = setTimeout(() => toast("Stampa: l'app non ha risposto"), 4000); }
     o.frame.contentWindow.postMessage({ suitePrint: 1 }, '*');
   }
   let printWait = 0;
@@ -578,7 +581,7 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         case 'notify': toast(`${a}${b ? ' — ' + b : ''}`); return reply({ result: true });
         case 'print': { // Mac: finestra nativa; iPhone/iPad: riquadro «Stampa»; Windows/altri: stampa dell'iframe
           clearTimeout(printWait);
-          if (typeof a === 'string' && a.startsWith('ERR:')) { toast('Stampa: ' + a.slice(4)); return reply({ result: 'error' }); }
+          if (typeof a === 'string' && a.startsWith('ERR:')) { if (IOS_SHELL) printAsk().fail('Errore: ' + a.slice(4)); else toast('Stampa: ' + a.slice(4)); return reply({ result: 'error' }); }
           const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suitePrint;
           if (!h) {
             if (IOS_SHELL) { try { await printWeb(String(a || ''), String(b || '')); } catch (e) { /* ignora */ } return reply({ result: 'web' }); }
