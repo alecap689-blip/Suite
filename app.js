@@ -442,7 +442,7 @@ function snapDoc(){var c=document.documentElement.cloneNode(true);
 function nativePrint(){if(busy)return;busy=true;
  try{dispatchEvent(new Event('beforeprint'));}catch(e){}
  setTimeout(function(){var done=function(){busy=false;try{dispatchEvent(new Event('afterprint'));}catch(e){}};
-  var html;try{html=snapDoc();}catch(e){done();return;}
+  var html;try{html=snapDoc();}catch(e){call('print',['ERR:'+e.message,'']).then(done,done);return;}
   call('print',[html,document.title]).then(done,done);},60);}
 var IOS=/iPhone|iPad|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
 if(NP||IOS)window.print=nativePrint; /* iOS: window.print() dentro un iframe non funziona: l'istantanea passa alla shell, che stampa dalla pagina principale */
@@ -523,8 +523,11 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
   function printActive() {
     const o = openApps.get(activeId);
     if ($('#runner').hidden || !o || !o.frame.contentWindow) return toast("Apri un'app per stamparla");
+    toast('Stampa: preparo il documento…');
+    clearTimeout(printWait); printWait = setTimeout(() => toast("Stampa: l'app non ha risposto (riapri la Suite)"), 4000);
     o.frame.contentWindow.postMessage({ suitePrint: 1 }, '*');
   }
+  let printWait = 0;
   window.__suitePrint = printActive;
   $('#runner-print').addEventListener('click', printActive);
   document.addEventListener('keydown', (e) => {
@@ -573,7 +576,9 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         case 'shared.set': lsSet(`suite.shared.${a}`, JSON.stringify(b)); return reply({ result: true });
         case 'nav.home': if (multi()) showSuite(); else closeApp(id); return;
         case 'notify': toast(`${a}${b ? ' — ' + b : ''}`); return reply({ result: true });
-        case 'print': { // solo Mac: finestra di stampa nativa con l'istantanea inviata dall'app
+        case 'print': { // Mac: finestra nativa; iPhone/iPad: riquadro «Stampa»; Windows/altri: stampa dell'iframe
+          clearTimeout(printWait);
+          if (typeof a === 'string' && a.startsWith('ERR:')) { toast('Stampa: ' + a.slice(4)); return reply({ result: 'error' }); }
           const h = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.suitePrint;
           if (!h) {
             if (IOS_SHELL) { try { await printWeb(String(a || ''), String(b || '')); } catch (e) { /* ignora */ } return reply({ result: 'web' }); }
