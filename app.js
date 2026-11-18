@@ -73,6 +73,14 @@
 
   /* ---------------- icone ---------------- */
   const FILEISH = /\.(svg|png|jpe?g|webp|gif)$/i;
+  /* Libreria icone (shell/icon-library.js): nel manifest "icon": "lib:cartella" */
+  const LIB = /^lib:(.+)$/;
+  const libData = (icon) => { const m = LIB.exec(icon || ''); return m && window.SuiteIcons && SuiteIcons.has(m[1]) ? SuiteIcons.dataUrl(m[1]) : null; };
+  function iconPicker(current) {
+    const L = window.SuiteIcons ? SuiteIcons.list() : [];
+    return `<div class="field">Icona dalla libreria<div class="chips icon-grid" style="margin-top:6px;max-height:190px;overflow:auto">
+      ${L.map((i) => `<label class="chip" title="${esc(i.name)}" style="padding:3px;cursor:pointer"><input type="radio" name="libicon" value="${esc(i.id)}" ${current === 'lib:' + i.id ? 'checked' : ''} style="position:absolute;opacity:0"><img src="${esc(SuiteIcons.dataUrl(i.id))}" alt="${esc(i.name)}" width="40" height="40" style="display:block;border-radius:10px"></label>`).join('')}</div></div>`;
+  }
   function appIcon(rec, cls) {
     const m = rec.manifest, c = esc(m.color || '#111111');
     let inner;
@@ -198,7 +206,7 @@
     const appRows = [...state.apps.values()].map((r) => `<div class="list-row" style="--c:${esc(r.manifest.color || '#111111')}">
         ${appIcon(r, 'mini-ico')}<span class="grow"><b>${esc(r.manifest.name)} <span class="pill">v${esc(r.manifest.version)}</span></b><small>${esc(r.manifest.description || r.id)}</small></span>
         <div class="chips">${l.sections.map((s) => `<button class="chip" style="--c:${esc(s.color)}" data-act="toggle-assign" data-id="${esc(r.id)}" data-s="${esc(s.id)}" aria-pressed="${s.apps.includes(r.id)}">${esc(s.icon)} ${esc(s.name)}</button>`).join('')}</div>
-        <button class="btn sm danger" data-act="uninstall" data-id="${esc(r.id)}">Disinstalla</button></div>`).join('');
+        <button class="btn sm" data-act="app-icon" data-id="${esc(r.id)}">Icona</button><button class="btn sm danger" data-act="uninstall" data-id="${esc(r.id)}">Disinstalla</button></div>`).join('');
     return `<div class="view"><div class="page-head"><span class="big-ico">🧩</span><div><h1>Gestisci</h1><p>Sezioni e app: aggiungi, rimuovi, scegli cosa mostrare dove.</p></div></div>
       <h2 class="sub">Sezioni</h2><div class="card">${secRows || '<div class="list-row">Nessuna sezione.</div>'}</div>
       <div class="row" style="margin-top:14px"><button class="btn primary" data-act="add-section">＋ Nuova sezione</button></div>
@@ -268,6 +276,7 @@
       case 's-up': return commit((x) => Layout.reorderSections(x, move(l.sections.map((s) => s.id), id, -1)));
       case 's-down': return commit((x) => Layout.reorderSections(x, move(l.sections.map((s) => s.id), id, 1)));
       case 'toggle-assign': return commit((x) => sectionOf(d.s).apps.includes(id) ? Layout.unassignApp(x, id, d.s) : Layout.assignApp(x, id, d.s));
+      case 'app-icon': return appIconModal(id);
       case 'uninstall': return uninstallModal(id);
       case 'install-folder': $('#pick-folder').value = ''; return $('#pick-folder').click();
       case 'install-file': $('#pick-file').value = ''; $('#pick-file').dataset.mode = 'install'; return $('#pick-file').click();
@@ -289,6 +298,19 @@
   function delSectionModal(s) {
     modal({ title: `Eliminare "${s.name}"?`, body: '<p>Le app non vengono disinstallate: restano disponibili in "Tutte le app" e nelle altre sezioni.</p>', submit: 'Elimina', danger: true,
       onSubmit: () => { commit((l) => Layout.removeSection(l, s.id)); toast('Sezione eliminata'); } });
+  }
+
+  function appIconModal(id) {
+    const rec = state.apps.get(id); if (!rec) return;
+    modal({
+      title: `Icona di ${rec.manifest.name}`, submit: 'Applica',
+      body: iconPicker(rec.manifest.icon),
+      onSubmit: async (fd) => {
+        const lib = fd.get('libicon'); if (!lib) return false;
+        const next = { ...rec, manifest: { ...rec.manifest, icon: 'lib:' + lib }, iconData: libData('lib:' + lib) };
+        await putApp(next); await refreshApps(); commit((l) => l); toast('Icona aggiornata');
+      },
+    });
   }
 
   function uninstallModal(id) {
@@ -345,6 +367,7 @@
       let html = await inlineAssets(await readText(entry), map, dirOf(resolvePath(base, manifest.entry)));
       let iconData = null;
       if (manifest.icon && FILEISH.test(manifest.icon)) { const f = map.get(resolvePath(base, manifest.icon)); if (f) iconData = await readDataUrl(f); }
+      else iconData = libData(manifest.icon);
       await installRecord({ id: manifest.id, manifest, html, iconData });
     } catch (err) { toast('Installazione non riuscita: ' + err.message); }
   });
@@ -356,10 +379,11 @@
     modal({
       title: 'Installa app da file', submit: 'Installa',
       body: `<label class="field">Nome<input type="text" name="name" value="${esc(f.name.replace(/\.\w+$/, ''))}" required></label>
-        <label class="field">Icona (emoji)<input type="text" name="icon" value="🧩" maxlength="4"></label>
+        ${iconPicker('')}
+        <label class="field">…oppure emoji<input type="text" name="icon" value="🧩" maxlength="4"></label>
         <label class="field">Colore<input type="color" name="color" value="#111111"></label>`,
-      onSubmit: (fd) => installRecord({ id: Layout.slug(fd.get('name')) || base, html, iconData: null,
-        manifest: { id: Layout.slug(fd.get('name')) || base, name: fd.get('name'), version: '1.0.0', entry: f.name, icon: fd.get('icon'), color: fd.get('color'), permissions: ['storage', 'files', 'notifications'] } }),
+      onSubmit: (fd) => { const lib = fd.get('libicon'), icon = lib ? 'lib:' + lib : fd.get('icon'); return installRecord({ id: Layout.slug(fd.get('name')) || base, html, iconData: libData(icon),
+        manifest: { id: Layout.slug(fd.get('name')) || base, name: fd.get('name'), version: '1.0.0', entry: f.name, icon, color: fd.get('color'), permissions: ['storage', 'files', 'notifications'] } }); },
     });
   });
 
@@ -811,7 +835,7 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         const key = `suite.bundled.${manifest.id}`;
         if (state.apps.has(manifest.id) && lsGet(key) === manifest.version) continue;
         const html = await fetchText(`apps/${id}/${manifest.entry}`);
-        const iconData = manifest.icon && FILEISH.test(manifest.icon) ? await fetchDataUrl(`apps/${id}/${manifest.icon}`) : null;
+        const iconData = manifest.icon && FILEISH.test(manifest.icon) ? await fetchDataUrl(`apps/${id}/${manifest.icon}`) : libData(manifest.icon);
         const first = !state.apps.has(manifest.id);
         await putApp({ id: manifest.id, manifest, html, iconData });
         await refreshApps();
@@ -993,7 +1017,12 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
 
   /* PWA: offline per la shell (solo su https o localhost; non nel guscio nativo) */
   if (!fsBridge && 'serviceWorker' in navigator && (/^https:$/.test(location.protocol) || location.hostname === '127.0.0.1')) {
-    navigator.serviceWorker.register('sw.js').catch(() => { /* noop */ });
+    const eraControllata = !!navigator.serviceWorker.controller;
+    navigator.serviceWorker.addEventListener('controllerchange', () => { // nuova versione della shell: ricarica da sola (non se un'app è aperta: si perderebbe il lavoro)
+      if (!eraControllata) return;
+      if ($('#runner').hidden) location.reload(); else toast('Aggiornamento della Suite disponibile: chiudi e riapri la Suite.');
+    });
+    navigator.serviceWorker.register('sw.js').then((r) => r.update()).catch(() => { /* noop */ });
   }
 
   /* ---------------- avvio ---------------- */

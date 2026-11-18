@@ -261,3 +261,5 @@ input[type=text], select, textarea { box-shadow: inset 0 1px 3px rgba(0,0,0,.14)
   body.printing #print-frame { position: static !important; visibility: visible !important; width: 100% !important; }
   body.printing, html { height: auto !important; overflow: visible !important; background: #fff !important; }
 }
+.icon-grid .chip { position: relative; border-radius: 13px; min-height: 0; }
+.icon-grid .chip:has(input:checked) { outline: 2px solid var(--text); outline-offset: 1px; }

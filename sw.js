@@ -1,8 +1,8 @@
 /* Suite — service worker: la shell funziona anche offline. Rete per prima (si vede l'ultima versione), ma con
    attesa massima di 3,5 s: se la rete è assente o lenta si apre subito la copia in cache (che intanto si aggiorna).
    Solo file della stessa origine: le chiamate a Google non passano da qui. */
-const CACHE = 'suite-shell-v5';
-const FILES = ['./', 'index.html', 'styles.css', 'layout.js', 'sync.js', 'drive-web.js', 'config.js', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
+const CACHE = 'suite-shell-v7';
+const FILES = ['./', 'index.html', 'styles.css', 'layout.js', 'sync.js', 'drive-web.js', 'config.js', 'icon-library.js', 'app.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png', 'icons/apple-touch-icon.png'];
 const WAIT = 3500;
 self.addEventListener('install', (e) => { e.waitUntil(caches.open(CACHE).then((c) => c.addAll(FILES)).then(() => self.skipWaiting())); });
 self.addEventListener('activate', (e) => { e.waitUntil(caches.keys().then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k)))).then(() => self.clients.claim())); });
