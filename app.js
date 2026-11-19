@@ -54,7 +54,10 @@
     saveLayout(); render();
   }
   async function refreshApps() {
-    state.apps = new Map((await allApps()).map((r) => [r.id, r]));
+    /* manifest.platforms ("macos" | "windows" | "ios"): se presente, l'app compare solo su quelle piattaforme */
+    const PF = { mac: 'macos', win: 'windows', ios: 'ios' }[platform];
+    const ok = (r) => { const p = r.manifest && r.manifest.platforms; return !Array.isArray(p) || !p.length || p.includes(PF); };
+    state.apps = new Map((await allApps()).filter(ok).map((r) => [r.id, r]));
   }
 
   /* ---------------- tema ---------------- */
@@ -788,7 +791,10 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         msg.textContent = files.length ? 'Tocca il file da collegare: verrà riletto e salvato direttamente su Drive.' : `Nessun file ${accept || ''} trovato su Google Drive.`;
         find.hidden = files.length < 6; find.value = ''; showBk = false; draw();
       }
-      bar.append(no); box.append(el('strong', 'flex:0 0 auto', 'File su Google Drive'), msg, find, list, bar); ov.append(box); document.body.append(ov);
+      /* ripiego: sfogliare i file del telefono (app Archivio/iCloud) invece di Drive; la risposta 'unavailable' fa ripiegare l'app su files.open */
+      const loc = el('button', '', 'Sfoglia sul telefono…'); loc.className = 'btn';
+      loc.addEventListener('click', () => done(() => reject(new Error('unavailable'))));
+      bar.append(loc, no); box.append(el('strong', 'flex:0 0 auto', 'File su Google Drive'), msg, find, list, bar); ov.append(box); document.body.append(ov);
       load();
     });
   }
