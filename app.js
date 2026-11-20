@@ -663,7 +663,30 @@ document.documentElement.setAttribute('data-theme',cur);document.documentElement
         }
         case 'files.save': {
           const blob = a && b instanceof Blob ? b : new Blob([b], { type: c || 'application/octet-stream' });
-          const url = URL.createObjectURL(blob), el = document.createElement('a'); el.href = url; el.download = a || 'file'; el.click();
+          const fname = a || 'file';
+          // Dove il browser/WebView lo permette (Windows, Chrome/Edge) si sceglie nome e cartella con la finestra di sistema;
+          // annullando non viene scritto nulla (result:false). Altrove (Mac, iPhone) resta il download di prima.
+          if (typeof window.showSaveFilePicker === 'function') {
+            try {
+              const ext = (fname.match(/\.[A-Za-z0-9]{1,8}$/) || [''])[0];
+              const h = await window.showSaveFilePicker(Object.assign({ suggestedName: fname },
+                ext ? { types: [{ description: ext.slice(1).toUpperCase(), accept: { [blob.type || 'application/octet-stream']: [ext] } }] } : {}));
+              const w = await h.createWritable(); await w.write(blob); await w.close();
+              return reply({ result: true });
+            } catch (err) {
+              if (err && err.name === 'AbortError') return reply({ result: false });
+              /* altro errore (es. nessuna azione dell'utente): ripiego sul download */
+            }
+          }
+          // Mac (WKWebView non ha showSaveFilePicker): pannello nativo «Salva con nome» del guscio (op fileSave). Guscio vecchio/Windows senza
+          // l'operazione → 'unavailable' → ripiego sul download. Annullando: result:false.
+          if (fsBridge && typeof window.showSaveFilePicker !== 'function') {
+            try {
+              const r = await nativeFile('fileSave', { name: fname, data: await bufToB64(blob) });
+              return reply({ result: !(r && r.cancelled) });
+            } catch (err) { /* ripiego sul download */ }
+          }
+          const url = URL.createObjectURL(blob), el = document.createElement('a'); el.href = url; el.download = fname; el.click();
           setTimeout(() => URL.revokeObjectURL(url), 2000); return reply({ result: true });
         }
         case 'files.open': return reply({ result: await pickFile(a) });

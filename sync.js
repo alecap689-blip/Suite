@@ -8,6 +8,12 @@
 
   const TOMBSTONE_DAYS = 30;
   const DAY = 864e5;
+  /* Protezione dalle cancellazioni in blocco: se spariscono in locale almeno MASS_MIN record E più di MASS_SHARE di quelli noti,
+     non si scrivono tombstone: i dati si ripristinano dalla cartella (vedi scan). */
+  const MASS_MIN = 5, MASS_SHARE = 0.5;
+  /* Versione di un'app dentro il suo record (value.manifest.version) → array di numeri, o null */
+  const versionOf = (value) => { const v = value && value.manifest && value.manifest.version; return v ? String(v).split('.').map((n) => parseInt(n, 10) || 0) : null; };
+  const cmpVersion = (a, b) => { for (let i = 0; i < Math.max(a.length, b.length); i++) { const d = (a[i] || 0) - (b[i] || 0); if (d) return d < 0 ? -1 : 1; } return 0; };
 
   const enc = (s) => encodeURIComponent(s).replace(/[*!'()~]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase());
   const dec = (s) => decodeURIComponent(s);
@@ -101,9 +107,18 @@
         if (!m) st.files[path] = { rev: 1, updatedAt: initial ? 0 : t, updatedBy: deviceId, deleted: false, hash: h, dirty: true, seen: null };
         else if (m.deleted || m.hash !== h) { m.rev += 1; m.updatedAt = t; m.updatedBy = deviceId; m.deleted = false; m.hash = h; m.dirty = true; }
       });
+      /* Record spariti in locale. Una o due eliminazioni sono scelte dell'utente → tombstone. Ma se spariscono in blocco (profilo vecchio,
+         azzerato o non ancora caricato) NON sono cancellazioni: non si propagano, e i dati si ripristinano dalla cartella (m.restore).
+         20/11/2026: un profilo fermo al 19/11 aveva cancellato 26 record di Diario, Lista, Rubrica… sul cloud. */
+      const gone = Object.keys(st.files).filter((path) => !lastLocal.has(path) && !st.files[path].deleted && isSyncable(path));
+      const live = Object.keys(st.files).filter((path) => !st.files[path].deleted && isSyncable(path)).length;
+      const mass = !initial && gone.length >= MASS_MIN && gone.length > live * MASS_SHARE;
+      if (mass) st.guard = { at: now(), n: gone.length, of: live };
       Object.keys(st.files).forEach((path) => {
         const m = st.files[path];
-        if (!lastLocal.has(path) && !m.deleted) { m.rev += 1; m.updatedAt = t; m.updatedBy = deviceId; m.deleted = true; m.hash = hash(null); m.dirty = true; }
+        if (lastLocal.has(path) || m.deleted) return;
+        if (mass && gone.indexOf(path) >= 0) { m.restore = true; m.dirty = false; m.seen = null; m.mtime = undefined; return; } // da ripristinare, non da cancellare
+        m.rev += 1; m.updatedAt = t; m.updatedBy = deviceId; m.deleted = true; m.hash = hash(null); m.dirty = true; delete m.restore;
       });
     }
 
@@ -129,7 +144,11 @@
         if (hash(env.deleted ? null : env.value) === m.hash && !!env.deleted === !!m.deleted) { // stesso contenuto: nessun conflitto reale
           Object.assign(m, { rev: Math.max(m.rev, env.rev), updatedAt: env.updatedAt, updatedBy: env.updatedBy, dirty: false, seen: rk, mtime: f.mtime }); continue;
         }
-        const remoteWins = env.updatedAt > m.updatedAt || (env.updatedAt === m.updatedAt && String(env.updatedBy) > String(m.updatedBy));
+        let remoteWins = env.updatedAt > m.updatedAt || (env.updatedAt === m.updatedAt && String(env.updatedBy) > String(m.updatedBy));
+        if (f.path.startsWith('apps/') && !m.deleted && !env.deleted) { // app: vince sempre la versione più alta, mai quella più recente ma vecchia
+          const lv = versionOf(lastLocal.get(f.path)), rv = versionOf(env.value);
+          if (lv && rv) { const c = cmpVersion(rv, lv); if (c > 0) remoteWins = true; else if (c < 0) remoteWins = false; }
+        }
         if (remoteWins) {
           if (m.updatedAt !== 0) await conflictCopy(f.path, { id: f.path, rev: m.rev, updatedAt: m.updatedAt, updatedBy: m.updatedBy, deleted: !!m.deleted, value: m.deleted ? null : lastLocal.get(f.path) }, 'locale-sostituita'); // updatedAt 0 = dato locale appena adottato al primo collegamento: nessun conflitto vero
           takeRemote();
@@ -150,6 +169,11 @@
     async function push() {
       for (const path of Object.keys(st.files)) {
         const m = st.files[path]; if (!m.dirty) continue;
+        if (path.startsWith('apps/') && !m.deleted) { // mai sostituire nel cloud un'app con una versione più vecchia: si riprende quella del cloud
+          let cur = null; try { cur = JSON.parse(await driver.read(path)); } catch (e) { cur = null; }
+          const lv = versionOf(lastLocal.get(path)), rv = cur && !cur.deleted ? versionOf(cur.value) : null;
+          if (lv && rv && cmpVersion(rv, lv) > 0) { m.dirty = false; m.restore = true; m.seen = null; m.mtime = undefined; continue; }
+        }
         const env = { id: path, rev: m.rev, updatedAt: m.updatedAt, updatedBy: m.updatedBy, deleted: !!m.deleted, value: m.deleted ? null : lastLocal.get(path) };
         await driver.write(path, JSON.stringify(env));
         m.dirty = false; m.seen = keyOf(env); m.mtime = undefined;
@@ -173,6 +197,11 @@
         for (const c of changes) await adapter.apply(c.path, c.value, c.deleted);
         if (changes.length) await adapter.done(changes.map((c) => c.path));
         await push();
+        if (Object.keys(st.files).some((p) => st.files[p].restore && !st.files[p].dirty && !st.files[p].seen)) { // il push ha rifiutato qualcosa (app più vecchia del cloud): riprende subito quella del cloud
+          const more = await pull();
+          for (const c of more) await adapter.apply(c.path, c.value, c.deleted);
+          if (more.length) { await adapter.done(more.map((c) => c.path)); changes.push(...more); }
+        }
         if (!st.connectedAt) st.connectedAt = now();
         save();
         onStatus(st.conflicts.some((c) => c.at > (st.seenAt || 0)) ? 'conflict' : 'ok', { changed: changes.length });
